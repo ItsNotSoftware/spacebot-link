@@ -1,9 +1,9 @@
 from math import pi, sin, cos
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
-from direct.actor.Actor import Actor
-from direct.interval.IntervalGlobal import Sequence
-from panda3d.core import Point3, CardMaker, Texture
+from panda3d.core import Point3, CardMaker, Texture, TransparencyAttrib
+from panda3d.core import TransparencyAttrib
+
 
 # Import additional libraries for ZMQ and image processing.
 import zmq
@@ -31,7 +31,7 @@ class MyApp(ShowBase):
         self.background_texture.setup2dTexture(1, 1, Texture.T_unsigned_byte, Texture.F_rgb)
         self.scene.setTexture(self.background_texture)
         self.scene.setBin("background", 0)
-        self.scene.setDepthWrite(False)
+        self.scene.setDepthWrite(True)
 
         # Set up the ZMQ subscriber to receive JPEG images.
         self.zmq_context = zmq.Context()
@@ -46,20 +46,20 @@ class MyApp(ShowBase):
         # Add the camera spin task.
         self.taskMgr.add(self.spinCameraTask, "SpinCameraTask")
 
-        # Load and transform the panda actor.
-        self.pandaActor = Actor("models/panda-model", {"walk": "models/panda-walk4"})
-        self.pandaActor.setScale(0.005, 0.005, 0.005)
-        self.pandaActor.reparentTo(self.render)
-        self.pandaActor.loop("walk")
+        # Load and transform the .glb model.
+        self.model = self.loader.load_model("../assets/cobot.glb")  # Replace with your model path
+        self.model.setScale(12)  # Adjust scale as needed
+        self.model.reparentTo(self.render)
+        self.model.setPos(Point3(0, 0, 10))  # Adjust position as needed
+        self.model.setHpr(Point3(0, 45, 0))  # Adjust rotation as needed
 
-        # Create and play the sequence that coordinates the panda’s movement.
-        posInterval1 = self.pandaActor.posInterval(13, Point3(0, -10, 0), startPos=Point3(0, 10, 0))
-        posInterval2 = self.pandaActor.posInterval(13, Point3(0, 10, 0), startPos=Point3(0, -10, 0))
-        hprInterval1 = self.pandaActor.hprInterval(3, Point3(180, 0, 0), startHpr=Point3(0, 0, 0))
-        hprInterval2 = self.pandaActor.hprInterval(3, Point3(0, 0, 0), startHpr=Point3(180, 0, 0))
+        # Set color to black with some transparency
+        self.model.setColor(0.2, 0.1, 0.1, 0.2)  # RGBA (Black with 50% transparency)
+        self.model.setTransparency(TransparencyAttrib.M_alpha)
+        self.model.setDepthOffset(1)
+        self.model.setBin("transparent", 1)
+        self.model.setDepthWrite(False)
 
-        self.pandaPace = Sequence(posInterval1, hprInterval1, posInterval2, hprInterval2, name="pandaPace")
-        self.pandaPace.loop()
 
     def zmqTask(self, task):
         """Poll the ZMQ socket for a new JPEG frame and update the background texture."""
@@ -87,7 +87,7 @@ class MyApp(ShowBase):
     def spinCameraTask(self, task):
         angleDegrees = task.time * 6.0
         angleRadians = angleDegrees * (pi / 180.0)
-        self.camera.setPos(20 * sin(angleRadians), -20 * cos(angleRadians), 3)
+        self.camera.setPos(50 * sin(angleRadians), -50 * cos(angleRadians), 3)
         self.camera.setHpr(angleDegrees, 0, 0)
         return Task.cont
 
