@@ -1,6 +1,7 @@
 """
 SpaceBotLink – Panda3D viewer with ZMQ video background.
-Transparency is now handled entirely in Blender (glTF materials).
+Transparency is authored in Blender (glTF). Transparent flicker fixed by
+two-pass rendering (backfaces, then frontfaces) with fixed bins.
 """
 
 from math import pi, sin, cos
@@ -18,14 +19,20 @@ from panda3d.core import (
     DirectionalLight,
     AmbientLight,
     Vec4,
+    TransparencyAttrib,
+    CullFaceAttrib,
+    DepthOffsetAttrib,
 )
-from panda3d.core import loadPrcFileData
-
 
 # ---- Engine config (set before ShowBase) ----
 loadPrcFileData("", "window-title SpaceBotLink")
 loadPrcFileData("", "framebuffer-srgb true")  # correct color space for PBR/glTF
+# Important: we’ll control draw order ourselves via bins
+loadPrcFileData("", "transparency-sort off")
 # loadPrcFileData("", "notify-level-gobj debug")
+# Optional: MSAA (nice for alpha edges, not required)
+# loadPrcFileData("", "framebuffer-multisample 1")
+# loadPrcFileData("", "multisamples 8")
 
 
 class SpaceBotLinkApp(ShowBase):
@@ -71,12 +78,39 @@ class SpaceBotLinkApp(ShowBase):
         self.taskMgr.add(self._zmq_task, "ZMQTask")
         self.taskMgr.add(self._spin_camera_task, "SpinCameraTask")
 
-        # --- Load model (materials/transparency come from Blender) ---
-        self.model = self.loader.load_model("../assets/cobot4.glb")
-        self.model.reparentTo(self.render)
-        self.model.setScale(20)
-        self.model.setPos(Point3(8, 0, 6))
-        self.model.setHpr(0, 45, 0)
+        # --- Load model once (from glTF) ---
+        base_model = self.loader.load_model("../assets/cobot4.glb")
+        base_model.setScale(20)
+        base_model.setPos(Point3(8, 0, 6))
+        base_model.setHpr(0, 45, 0)
+
+        # We’ll render two *instances* with opposite culling and fixed order:
+        # 1) backfaces first, 2) frontfaces second.
+        self.model_back = base_model.copy_to(self.render)
+        self.model_front = base_model.copy_to(self.render)
+
+        # (Hide original if you keep it around)
+        base_model.hide()
+
+        # Common transparent setup (no depth writes, but DO depth test)
+        for np in (self.model_back, self.model_front):
+            np.setTransparency(TransparencyAttrib.MDual)  # depth pre-pass helps
+            np.setDepthWrite(False)  # blended pixels don't write depth
+            # Small depth offset so coplanar bits don’t fight (optional)
+            np.setAttrib(DepthOffsetAttrib.make(1))
+
+        # Backface pass (renders what's behind first)
+        self.model_back.setAttrib(
+            CullFaceAttrib.make(CullFaceAttrib.MCullCounterClockwise)
+        )
+        self.model_back.setBin("fixed", 10)
+
+        # Frontface pass (on top of backfaces)
+        self.model_front.setAttrib(CullFaceAttrib.make(CullFaceAttrib.MCullClockwise))
+        self.model_front.setBin("fixed", 11)
+
+        # IMPORTANT: Ensure Panda doesn’t collapse the two instances back together.
+        # Don’t call flattenStrong() on parent; keep them as separate passes.
 
     # ------------- helpers -------------
 
