@@ -27,15 +27,10 @@ from panda3d.core import (
 # ---- Engine config (set before ShowBase) ----
 loadPrcFileData("", "window-title SpaceBotLink")
 loadPrcFileData("", "framebuffer-srgb true")  # correct color space for PBR/glTF
-# Important: we’ll control draw order ourselves via bins
 loadPrcFileData("", "transparency-sort off")
-# loadPrcFileData("", "notify-level-gobj debug")
-# Optional: MSAA (nice for alpha edges, not required)
-# loadPrcFileData("", "framebuffer-multisample 1")
-# loadPrcFileData("", "multisamples 8")
 
 
-class SpaceBotLinkApp(ShowBase):
+class SpacebotLinkApp(ShowBase):
     def __init__(self):
         super().__init__()
         self.disableMouse()
@@ -157,5 +152,5 @@ class SpaceBotLinkApp(ShowBase):
 
 
 if __name__ == "__main__":
-    app = SpaceBotLinkApp()
+    app = SpacebotLinkApp()
     app.run()
