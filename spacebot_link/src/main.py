@@ -1,154 +1,159 @@
+# app.py
 """
 SpaceBotLink – Panda3D viewer with ZMQ video background.
-Transparency is authored in Blender (glTF). Transparent flicker fixed by
-two-pass rendering (backfaces, then frontfaces) with fixed bins.
+Transparency flicker fixed via two-pass avatar (backfaces then frontfaces).
 """
 
-from math import pi, sin, cos
-import cv2
-import numpy as np
-import zmq
-
-from direct.showbase.ShowBase import ShowBase
-from direct.task import Task
 from panda3d.core import (
     loadPrcFileData,
-    Point3,
     CardMaker,
     Texture,
     DirectionalLight,
     AmbientLight,
     Vec4,
-    TransparencyAttrib,
-    CullFaceAttrib,
-    DepthOffsetAttrib,
+    PythonTask,
 )
+from direct.showbase.ShowBase import ShowBase
+from direct.task import Task
+from math import pi, sin, cos
 
-# ---- Engine config (set before ShowBase) ----
+from camera_stream import CameraStream
+from sensor_bus import SensorBus
+from avatar import Avatar
+from ui import UI
+from intrinsics import apply_opencv_intrinsics_to_lens
+
+
+# --- engine config (before ShowBase) ---
 loadPrcFileData("", "window-title SpaceBotLink")
-loadPrcFileData("", "framebuffer-srgb true")  # correct color space for PBR/glTF
+loadPrcFileData("", "framebuffer-srgb true")
 loadPrcFileData("", "transparency-sort off")
 
 
 class SpacebotLinkApp(ShowBase):
-    def __init__(self):
+    def __init__(
+        self,
+        cam_endpoint: str = "tcp://localhost:5555",
+        sensor_endpoint: str = "tcp://localhost:5556",
+        gltf_model: str = "../assets/cobot4.glb",
+    ):
         super().__init__()
         self.disableMouse()
-
-        # --- Background video card (no depth interaction) ---
-        aspect_ratio = 720 / 1280  # (h / w) of incoming frames
-        cm = CardMaker("background")
-        cm.setFrame(-1, 1, -aspect_ratio, aspect_ratio)
-        self.bg_card = self.camera.attachNewNode(cm.generate())
-        self.bg_card.setScale(50)
-        self.bg_card.setPos(0, 100, 0)
-
-        self.background_texture = Texture("background")
-        self.background_texture.setup2dTexture(
-            1, 1, Texture.T_unsigned_byte, Texture.F_rgb
-        )
-        self.bg_card.setTexture(self.background_texture)
-        self.bg_card.setBin("background", 0)
-        self.bg_card.setDepthWrite(False)
-        self.bg_card.setDepthTest(False)
-
-        # --- PBR shading + simple lights ---
         self.render.setShaderAuto()
 
+        # lights
         sun = DirectionalLight("sun")
-        sun.setColor(Vec4(1.0, 1.0, 1.0, 1.0))
+        sun.setColor(Vec4(1, 1, 1, 1))
         sun_np = self.render.attachNewNode(sun)
         sun_np.setHpr(45, -60, 0)
         self.render.setLight(sun_np)
 
         amb = AmbientLight("ambient")
-        amb.setColor(Vec4(0.35, 0.35, 0.35, 1.0))
+        amb.setColor(Vec4(0.35, 0.35, 0.35, 1))
         amb_np = self.render.attachNewNode(amb)
         self.render.setLight(amb_np)
 
-        # --- ZMQ subscriber ---
-        self._setup_zmq("tcp://localhost:5555")
+        # IO
+        self.camera_stream = CameraStream(cam_endpoint)
+        self.sensors = SensorBus(sensor_endpoint)
 
-        # --- Tasks ---
-        self.taskMgr.add(self._zmq_task, "ZMQTask")
-        self.taskMgr.add(self._spin_camera_task, "SpinCameraTask")
+        # background card
+        self._make_bg_card(initial_aspect=self.camera_stream.aspect)
 
-        # --- Load model once (from glTF) ---
-        base_model = self.loader.load_model("../assets/cobot4.glb")
-        base_model.setScale(20)
-        base_model.setPos(Point3(8, 0, 6))
-        base_model.setHpr(0, 45, 0)
+        # avatar
+        if self.loader is not None:
+            self.avatar = Avatar(self.render, self.loader, gltf_model)
 
-        # We’ll render two *instances* with opposite culling and fixed order:
-        # 1) backfaces first, 2) frontfaces second.
-        self.model_back = base_model.copy_to(self.render)
-        self.model_front = base_model.copy_to(self.render)
+        # ui
+        self.ui = UI(self)
 
-        # (Hide original if you keep it around)
-        base_model.hide()
+        w, h = self.camera_stream.size
+        fx = fy = 900.0
+        cx, cy = w / 2, h / 2
+        apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
 
-        # Common transparent setup (no depth writes, but DO depth test)
-        for np in (self.model_back, self.model_front):
-            np.setTransparency(TransparencyAttrib.MDual)  # depth pre-pass helps
-            np.setDepthWrite(False)  # blended pixels don't write depth
-            # Small depth offset so coplanar bits don’t fight (optional)
-            np.setAttrib(DepthOffsetAttrib.make(1))
+        # tasks
+        self.taskMgr.add(self._camera_task, "CameraTask")
+        self.taskMgr.add(self._sensor_task, "SensorTask")
+        self.taskMgr.add(self._orbit_task, "OrbitTask")
+        self.taskMgr.add(self._hud_task, "HUDTask")
 
-        # Backface pass (renders what's behind first)
-        self.model_back.setAttrib(
-            CullFaceAttrib.make(CullFaceAttrib.MCullCounterClockwise)
-        )
-        self.model_back.setBin("fixed", 10)
+        # cleanup
+        self.exitFunc = self._cleanup
 
-        # Frontface pass (on top of backfaces)
-        self.model_front.setAttrib(CullFaceAttrib.make(CullFaceAttrib.MCullClockwise))
-        self.model_front.setBin("fixed", 11)
+    # ---- bg helpers ----
+    def _make_bg_card(self, initial_aspect: float):
+        cm = CardMaker("background")
+        cm.setFrame(-1, 1, -initial_aspect, initial_aspect)
+        self.bg_card = self.camera.attachNewNode(cm.generate())  # type: ignore
+        self.bg_card.setScale(50)
+        self.bg_card.setPos(0, 100, 0)
+        self.bg_card.setBin("background", 0)
+        self.bg_card.setDepthWrite(False)
+        self.bg_card.setDepthTest(False)
 
-        # IMPORTANT: Ensure Panda doesn’t collapse the two instances back together.
-        # Don’t call flattenStrong() on parent; keep them as separate passes.
+        self.bg_tex = Texture("background")
+        self.bg_tex.setup2dTexture(2, 2, Texture.T_unsigned_byte, Texture.F_rgb)
+        self.bg_card.setTexture(self.bg_tex)
 
-    # ------------- helpers -------------
-
-    def _setup_zmq(self, endpoint: str) -> None:
-        self.zmq_context = zmq.Context()
-        self.zmq_socket = self.zmq_context.socket(zmq.SUB)
-        self.zmq_socket.connect(endpoint)
-        self.zmq_socket.setsockopt_string(zmq.SUBSCRIBE, "")
-        self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1)  # ms timeout
-
-    # ------------- tasks -------------
-
-    def _zmq_task(self, task: Task):
-        """Poll the ZMQ socket for a JPEG frame and update the background texture."""
-        try:
-            msg = self.zmq_socket.recv(flags=zmq.NOBLOCK)
-            np_arr = np.frombuffer(msg, dtype=np.uint8)
-            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if img_bgr is None:
-                return Task.cont
-
-            # Flip if needed (keep if your producer is inverted)
-            img_bgr = np.flipud(img_bgr)
-
-            # BGR -> RGB for Panda
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            h, w, _ = img_rgb.shape
-
-            self.background_texture.setup2dTexture(
-                w, h, Texture.T_unsigned_byte, Texture.F_rgb
-            )
-            self.background_texture.setRamImageAs(img_rgb.tobytes(), "RGB")
-        except zmq.Again:
-            pass
+    # ---- tasks ----
+    def _camera_task(self, task: PythonTask):
+        if self.camera_stream.poll():
+            rgb = self.camera_stream.frame_rgb
+            h, w = rgb.shape[:2]  # type: ignore
+            # keep it simple: no dynamic card reshape; just update texture
+            self.bg_tex.setup2dTexture(w, h, Texture.T_unsigned_byte, Texture.F_rgb)
+            self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")  # type: ignore
         return Task.cont
 
-    def _spin_camera_task(self, task: Task):
-        """Orbit the camera slowly around the origin."""
+    def _sensor_task(self, task: PythonTask):
+        self.sensors.poll()
+
+        pose = self.sensors.get("pose")
+        if pose:
+            self.avatar.set_pos(pose.get("x", 8), pose.get("y", 0), pose.get("z", 6))
+            self.avatar.set_hpr(pose.get("h", 0), pose.get("p", 45), pose.get("r", 0))
+
+        intr = self.sensors.get("intrinsics")
+        if intr:
+            w = int(intr.get("width", self.camera_stream.size[0]))
+            h = int(intr.get("height", self.camera_stream.size[1]))
+            fx = float(intr.get("fx"))
+            fy = float(intr.get("fy"))
+            cx = float(intr.get("cx"))
+            cy = float(intr.get("cy"))
+            if all(v is not None for v in [fx, fy, cx, cy]):
+                apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
+
+        return Task.cont
+
+    def _orbit_task(self, task: PythonTask):
+        if not self.ui.orbit_enabled:
+            return Task.cont
         angle_deg = task.time * 25.0
         angle_rad = angle_deg * (pi / 180.0)
-        self.camera.setPos(50 * sin(angle_rad), -50 * cos(angle_rad), 3)
-        self.camera.setHpr(angle_deg, 0, 0)
+        self.camera.setPos(50 * sin(angle_rad), -50 * cos(angle_rad), 3)  # type: ignore
+        self.camera.setHpr(angle_deg, 0, 0)  # type: ignore
         return Task.cont
+
+    def _hud_task(self, task: PythonTask):
+        rgb = self.camera_stream.frame_rgb
+        if rgb is not None:
+            w, h = rgb.shape[1], rgb.shape[0]
+            self.ui.update(f"Video {w}x{h}")
+        else:
+            self.ui.update("Waiting for video…")
+        return Task.cont
+
+    def _cleanup(self):
+        try:
+            self.camera_stream.close()
+        except Exception:
+            pass
+        try:
+            self.sensors.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
