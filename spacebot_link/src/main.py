@@ -89,6 +89,7 @@ class SpacebotLinkApp(ShowBase):
         self.bg_card.setScale(50)
         self.bg_card.setPos(0, 100, 0)
         self.bg_card.setBin("background", 0)
+        self.setBackgroundColor(0, 0, 0, 1)
         self.bg_card.setDepthWrite(False)
         self.bg_card.setDepthTest(False)
 
