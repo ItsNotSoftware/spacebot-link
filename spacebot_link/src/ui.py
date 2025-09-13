@@ -9,7 +9,6 @@ class UI:
 
     def __init__(self, base: ShowBase):
         self.base = base
-        self._orbit = True
 
         self._hud = OnscreenText(
             text=self._text(),
@@ -21,7 +20,7 @@ class UI:
             parent=base.a2dTopLeft,
         )
 
-        base.accept("o", self._toggle_orbit)
+        # UI hotkeys
         base.accept("f", self._toggle_wire)
         base.accept("1", lambda: self._bump_fov(-2))
         base.accept("2", lambda: self._bump_fov(+2))
@@ -31,9 +30,6 @@ class UI:
 
     def update(self, extra: str = "") -> None:
         self._hud.setText(self._text() + extra)
-
-    def _toggle_orbit(self) -> None:
-        self._orbit = not self._orbit
 
     def _toggle_wire(self) -> None:
         if self.base.render.hasRenderMode():
@@ -45,7 +41,3 @@ class UI:
         lens: PerspectiveLens = self.base.camLens
         fx, fy = lens.getFov()
         lens.setFov(max(10.0, fx + delta), max(10.0, fy + delta))
-
-    @property
-    def orbit_enabled(self) -> bool:
-        return self._orbit

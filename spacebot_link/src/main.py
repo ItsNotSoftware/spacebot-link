@@ -1,7 +1,12 @@
 # app.py
-"""
-SpaceBotLink – Panda3D viewer with ZMQ video background.
-Transparency flicker fixed via two-pass avatar (backfaces then frontfaces).
+"""SpaceBotLink viewer.
+
+This module defines the main Panda3D application that renders a 3D avatar
+over a live video background received via ZMQ. Transparency flicker is
+mitigated using a two-pass avatar (backfaces then frontfaces).
+
+The application also listens to a sensor bus for pose and camera intrinsic
+updates and reflects those changes in the scene and active camera lens.
 """
 
 from panda3d.core import (
@@ -12,10 +17,14 @@ from panda3d.core import (
     AmbientLight,
     Vec4,
     PythonTask,
+    KeyboardButton,
+    Vec3,
+    ClockObject,
 )
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from math import pi, sin, cos
+from pathlib import Path
 
 from camera_stream import CameraStream
 from sensor_bus import SensorBus
@@ -23,14 +32,47 @@ from avatar import Avatar
 from ui import UI
 from intrinsics import apply_opencv_intrinsics_to_lens
 
+MOVE_SPEED = 0.8
+ROTATE_SPEED = 1.5
+
 
 # --- engine config (before ShowBase) ---
 loadPrcFileData("", "window-title SpaceBotLink")
 loadPrcFileData("", "framebuffer-srgb true")
 loadPrcFileData("", "transparency-sort off")
 
+# Ensure glTF loader is registered (for packaged or strict environments)
+try:  # pragma: no cover - optional runtime registration
+    from panda3d_gltf import GLTFLoader  # type: ignore
+
+    GLTFLoader.register_loader()
+except Exception:
+    pass
+
+# --- key mappings ---
+forward_button = KeyboardButton.ascii_key("w")
+backward_button = KeyboardButton.ascii_key("s")
+left_button = KeyboardButton.ascii_key("a")
+right_button = KeyboardButton.ascii_key("d")
+up_button = KeyboardButton.ascii_key("e")
+down_button = KeyboardButton.ascii_key("q")
+pitch_up_button = KeyboardButton.ascii_key("i")
+pitch_down_button = KeyboardButton.ascii_key("k")
+yaw_left_button = KeyboardButton.ascii_key("j")
+yaw_right_button = KeyboardButton.ascii_key("l")
+roll_left_button = KeyboardButton.ascii_key("u")
+roll_right_button = KeyboardButton.ascii_key("o")
+
 
 class SpacebotLinkApp(ShowBase):
+    """Main Panda3D application.
+
+    Args:
+        cam_endpoint: ZMQ endpoint for the compressed RGB video stream.
+        sensor_endpoint: ZMQ endpoint for sensor messages (pose/intrinsics).
+        gltf_model: Path to the GLTF avatar model to load.
+    """
+
     def __init__(
         self,
         cam_endpoint: str = "tcp://localhost:5555",
@@ -60,9 +102,17 @@ class SpacebotLinkApp(ShowBase):
         # background card
         self._make_bg_card(initial_aspect=self.camera_stream.aspect)
 
-        # avatar
+        # avatar (resolve model path robustly)
         if self.loader is not None:
-            self.avatar = Avatar(self.render, self.loader, gltf_model)
+            model_path = Path(gltf_model)
+            if not model_path.exists():
+                # Resolve relative to this file: spacebot_link/src/ -> ../assets/
+                model_path = (
+                    Path(__file__).resolve().parent.parent
+                    / "assets"
+                    / Path(gltf_model).name
+                )
+            self.avatar = Avatar(self.render, self.loader, str(model_path))
 
         # ui
         self.ui = UI(self)
@@ -71,11 +121,14 @@ class SpacebotLinkApp(ShowBase):
         fx = fy = 900.0
         cx, cy = w / 2, h / 2
         apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
+        # Prevent near/far plane clipping of large or close models
+        self.camLens.setNear(0.1)
+        self.camLens.setFar(5000.0)
 
         # tasks
         self.taskMgr.add(self._camera_task, "CameraTask")
         self.taskMgr.add(self._sensor_task, "SensorTask")
-        self.taskMgr.add(self._orbit_task, "OrbitTask")
+        self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
         self.taskMgr.add(self._hud_task, "HUDTask")
 
         # cleanup
@@ -83,6 +136,11 @@ class SpacebotLinkApp(ShowBase):
 
     # ---- bg helpers ----
     def _make_bg_card(self, initial_aspect: float):
+        """Create the textured background card for the video stream.
+
+        Args:
+            initial_aspect: Initial height/width ratio used to size the card.
+        """
         cm = CardMaker("background")
         cm.setFrame(-1, 1, -initial_aspect, initial_aspect)
         self.bg_card = self.camera.attachNewNode(cm.generate())  # type: ignore
@@ -99,6 +157,14 @@ class SpacebotLinkApp(ShowBase):
 
     # ---- tasks ----
     def _camera_task(self, task: PythonTask):
+        """Poll the ZMQ camera stream and update the background texture.
+
+        Args:
+            task: Panda3D task object.
+
+        Returns:
+            `direct.task.Task.cont` to continue scheduling the task.
+        """
         if self.camera_stream.poll():
             rgb = self.camera_stream.frame_rgb
             h, w = rgb.shape[:2]  # type: ignore
@@ -108,6 +174,14 @@ class SpacebotLinkApp(ShowBase):
         return Task.cont
 
     def _sensor_task(self, task: PythonTask):
+        """Handle sensor bus messages (pose and camera intrinsics).
+
+        Args:
+            task: Panda3D task object.
+
+        Returns:
+            `direct.task.Task.cont` to continue scheduling the task.
+        """
         self.sensors.poll()
 
         pose = self.sensors.get("pose")
@@ -125,19 +199,77 @@ class SpacebotLinkApp(ShowBase):
             cy = float(intr.get("cy"))
             if all(v is not None for v in [fx, fy, cx, cy]):
                 apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
+                # Reapply clip planes after intrinsics change
+                self.camLens.setNear(0.1)
+                self.camLens.setFar(5000.0)
 
         return Task.cont
 
-    def _orbit_task(self, task: PythonTask):
-        if not self.ui.orbit_enabled:
+    def _pool_keyboard(self, task: PythonTask):
+        """Poll keyboard state and move/rotate the avatar.
+
+        WASD for planar movement, Q/E for down/up. I/K pitch, J/L yaw,
+        U/O roll. Movement is in the avatar's local space.
+
+        Args:
+            task: Panda3D task object.
+
+        Returns:
+            `direct.task.Task.cont` to continue scheduling the task.
+        """
+        # Time step since last frame
+        dt = ClockObject.getGlobalClock().getDt()
+        mw = self.mouseWatcherNode  # type: ignore
+        if not mw:
             return Task.cont
-        angle_deg = task.time * 25.0
-        angle_rad = angle_deg * (pi / 180.0)
-        self.camera.setPos(50 * sin(angle_rad), -50 * cos(angle_rad), 3)  # type: ignore
-        self.camera.setHpr(angle_deg, 0, 0)  # type: ignore
+
+        # Translation in local avatar space
+        move = Vec3(0, 0, 0)
+        if mw.is_button_down(forward_button):
+            move.y += MOVE_SPEED * dt
+        if mw.is_button_down(backward_button):
+            move.y -= MOVE_SPEED * dt
+        if mw.is_button_down(left_button):
+            move.x -= MOVE_SPEED * dt
+        if mw.is_button_down(right_button):
+            move.x += MOVE_SPEED * dt
+        if mw.is_button_down(up_button):
+            move.z += MOVE_SPEED * dt
+        if mw.is_button_down(down_button):
+            move.z -= MOVE_SPEED * dt
+
+        if move.length_squared() > 0:
+            self.avatar.move_local(move.x, move.y, move.z)
+
+        # Rotation deltas in degrees
+        dh = dp = dr = 0.0
+        step = ROTATE_SPEED * 60.0 * dt
+        if mw.is_button_down(yaw_left_button):
+            dh += step
+        if mw.is_button_down(yaw_right_button):
+            dh -= step
+        if mw.is_button_down(pitch_up_button):
+            dp += step
+        if mw.is_button_down(pitch_down_button):
+            dp -= step
+        if mw.is_button_down(roll_left_button):
+            dr += step
+        if mw.is_button_down(roll_right_button):
+            dr -= step
+
+        if dh or dp or dr:
+            self.avatar.add_hpr(dh, dp, dr)
         return Task.cont
 
     def _hud_task(self, task: PythonTask):
+        """Update UI/HUD text with current video status.
+
+        Args:
+            task: Panda3D task object.
+
+        Returns:
+            `direct.task.Task.cont` to continue scheduling the task.
+        """
         rgb = self.camera_stream.frame_rgb
         if rgb is not None:
             w, h = rgb.shape[1], rgb.shape[0]
@@ -147,6 +279,7 @@ class SpacebotLinkApp(ShowBase):
         return Task.cont
 
     def _cleanup(self):
+        """Release resources on exit (camera stream, sensor bus)."""
         try:
             self.camera_stream.close()
         except Exception:

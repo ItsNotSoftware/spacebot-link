@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""ZMQ video publisher for OpenCV and ZED cameras.
+
+Publishes JPEG-encoded frames over a ZMQ ``PUB`` socket at ``tcp://*:5555``
+with an optional artificial delay. Supports a standard OpenCV webcam source
+or a ZED camera via ``pyzed.sl`` when available.
+"""
 import sys
 import signal
 import time
@@ -13,13 +19,22 @@ exit_app: bool = False
 
 
 def signal_handler(sig: int, frame) -> None:
-    """Handle Ctrl+C to exit gracefully."""
+    """Handle Ctrl+C to exit gracefully.
+
+    Args:
+        sig: Signal number.
+        frame: Current stack frame (unused).
+    """
     global exit_app
     exit_app = True
 
 
 def log_message(msg: str) -> None:
-    """Print a message with a ZMQ prefix."""
+    """Print a message with a ZMQ prefix.
+
+    Args:
+        msg: Message text.
+    """
     print(f"[ZMQ Stream] {msg}", flush=True)
 
 
@@ -29,9 +44,13 @@ def log_message(msg: str) -> None:
 def open_cv_camera(
     device_index: int = 0,
 ) -> Optional[Tuple[cv2.VideoCapture, int, int, float]]:
-    """
-    Open a webcam using OpenCV without overriding default resolution.
-    Returns (cap, width, height, fps) or None if failed.
+    """Open a webcam using OpenCV without overriding defaults.
+
+    Args:
+        device_index: Video device index to open.
+
+    Returns:
+        Tuple of ``(cap, width, height, fps)`` on success, otherwise ``None``.
     """
     cap = cv2.VideoCapture(device_index, cv2.CAP_ANY)
     if not cap.isOpened():
@@ -52,9 +71,10 @@ def open_cv_camera(
 def open_zed_camera() -> (
     Optional[Tuple["sl.Camera", "sl.Mat", float]]
 ):  # forward-decl types
-    """
-    Open a ZED camera using pyzed.sl.
-    Returns (zed, left_image, fps) or None if failed.
+    """Open a ZED camera using ``pyzed.sl``.
+
+    Returns:
+        Tuple of ``(zed, left_image_mat, fps)`` on success, otherwise ``None``.
     """
     try:
         import pyzed.sl as sl
@@ -80,14 +100,15 @@ def open_zed_camera() -> (
 
 
 def main() -> None:
-    """
+    """Run the ZMQ publisher CLI.
+
     Usage:
-        python stream_zmq.py <cv|zed> <delay_ms> [device_index]
+        python publisher.py <cv|zed> <delay_ms> [device_index]
 
     Examples:
-        python stream_zmq.py cv 0
-        python stream_zmq.py cv 150 1
-        python stream_zmq.py zed 200
+        python publisher.py cv 0
+        python publisher.py cv 150 1
+        python publisher.py zed 200
     """
     if len(sys.argv) < 3:
         print(main.__doc__)
