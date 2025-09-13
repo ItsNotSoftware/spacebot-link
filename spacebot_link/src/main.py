@@ -124,6 +124,7 @@ class SpacebotLinkApp(ShowBase):
         # Prevent near/far plane clipping of large or close models
         self.camLens.setNear(0.1)
         self.camLens.setFar(5000.0)
+        self._update_bg_scale()
 
         # tasks
         self.taskMgr.add(self._camera_task, "CameraTask")
@@ -154,6 +155,32 @@ class SpacebotLinkApp(ShowBase):
         self.bg_tex = Texture("background")
         self.bg_tex.setup2dTexture(2, 2, Texture.T_unsigned_byte, Texture.F_rgb)
         self.bg_card.setTexture(self.bg_tex)
+
+        # Remember aspect of the background card and scale to fill the view
+        self._bg_aspect = float(initial_aspect)
+        self._update_bg_scale()
+
+    def _update_bg_scale(self) -> None:
+        """Scale the background card so it fills the current camera view.
+
+        Uses the camera's vertical FOV and the card's distance from the camera
+        to compute the required uniform scale so that the card exactly matches
+        the frustum extents at that depth (no letterboxing).
+        """
+        if not hasattr(self, "bg_card"):
+            return
+        # Distance of the card from the camera (parented to camera)
+        d = abs(self.bg_card.getY())  # type: ignore
+        # Vertical FOV in degrees -> radians
+        fov_x, fov_y = self.camLens.getFov()
+        fov_y_rad = fov_y * (pi / 180.0)
+        # Required half-height in world units at distance d
+        half_h = d * (sin(fov_y_rad / 2.0) / cos(fov_y_rad / 2.0))  # tan
+        # Our card has local vertical half-size of `_bg_aspect` before scaling
+        # so uniform scale s must satisfy: s * _bg_aspect = half_h
+        if getattr(self, "_bg_aspect", 0) > 0:
+            s = half_h / self._bg_aspect
+            self.bg_card.setScale(s)  # type: ignore
 
     # ---- tasks ----
     def _camera_task(self, task: PythonTask):
@@ -202,6 +229,7 @@ class SpacebotLinkApp(ShowBase):
                 # Reapply clip planes after intrinsics change
                 self.camLens.setNear(0.1)
                 self.camLens.setFar(5000.0)
+                self._update_bg_scale()
 
         return Task.cont
 

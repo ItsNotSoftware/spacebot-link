@@ -41,3 +41,7 @@ class UI:
         lens: PerspectiveLens = self.base.camLens
         fx, fy = lens.getFov()
         lens.setFov(max(10.0, fx + delta), max(10.0, fy + delta))
+        # Keep background scaled to fill after FOV changes, if available
+        update = getattr(self.base, "_update_bg_scale", None)
+        if callable(update):
+            update()
