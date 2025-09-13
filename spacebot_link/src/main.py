@@ -21,6 +21,7 @@ from panda3d.core import (
     Vec3,
     ClockObject,
 )
+from collections import deque
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from math import pi, sin, cos
@@ -56,6 +57,9 @@ left_button = KeyboardButton.ascii_key("a")
 right_button = KeyboardButton.ascii_key("d")
 up_button = KeyboardButton.ascii_key("e")
 down_button = KeyboardButton.ascii_key("q")
+# additional up/down options
+up_button_alt = KeyboardButton.space()
+down_button_alt = KeyboardButton.lshift()
 pitch_up_button = KeyboardButton.ascii_key("i")
 pitch_down_button = KeyboardButton.ascii_key("k")
 yaw_left_button = KeyboardButton.ascii_key("j")
@@ -116,6 +120,8 @@ class SpacebotLinkApp(ShowBase):
 
         # ui
         self.ui = UI(self)
+
+        self._fps_samples = deque(maxlen=120)
 
         w, h = self.camera_stream.size
         fx = fy = 900.0
@@ -227,8 +233,8 @@ class SpacebotLinkApp(ShowBase):
             if all(v is not None for v in [fx, fy, cx, cy]):
                 apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
                 # Reapply clip planes after intrinsics change
-                self.camLens.setNear(0.1)
-                self.camLens.setFar(5000.0)
+                self.camLens.setNear(0.1)  # type: ignore
+                self.camLens.setFar(5000.0)  # type: ignore
                 self._update_bg_scale()
 
         return Task.cont
@@ -251,7 +257,7 @@ class SpacebotLinkApp(ShowBase):
         if not mw:
             return Task.cont
 
-        # Translation in local avatar space
+        # Translation in world space (WASD/QE)
         move = Vec3(0, 0, 0)
         if mw.is_button_down(forward_button):
             move.y += MOVE_SPEED * dt
@@ -261,13 +267,13 @@ class SpacebotLinkApp(ShowBase):
             move.x -= MOVE_SPEED * dt
         if mw.is_button_down(right_button):
             move.x += MOVE_SPEED * dt
-        if mw.is_button_down(up_button):
+        if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
             move.z += MOVE_SPEED * dt
-        if mw.is_button_down(down_button):
+        if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
             move.z -= MOVE_SPEED * dt
 
         if move.length_squared() > 0:
-            self.avatar.move_local(move.x, move.y, move.z)
+            self.avatar.move_world(move.x, move.y, move.z)
 
         # Rotation deltas in degrees
         dh = dp = dr = 0.0
@@ -299,11 +305,19 @@ class SpacebotLinkApp(ShowBase):
             `direct.task.Task.cont` to continue scheduling the task.
         """
         rgb = self.camera_stream.frame_rgb
+        dt = ClockObject.getGlobalClock().getDt()
+        if dt > 1e-6:
+            self._fps_samples.append(1.0 / dt)
+        avg_fps = (
+            (sum(self._fps_samples) / len(self._fps_samples))
+            if self._fps_samples
+            else 0.0
+        )
         if rgb is not None:
             w, h = rgb.shape[1], rgb.shape[0]
-            self.ui.update(f"Video {w}x{h}")
+            self.ui.update(f"Video {w}x{h} | FPS {avg_fps:.1f}")
         else:
-            self.ui.update("Waiting for video…")
+            self.ui.update(f"Waiting for video… | FPS {avg_fps:.1f}")
         return Task.cont
 
     def _cleanup(self):

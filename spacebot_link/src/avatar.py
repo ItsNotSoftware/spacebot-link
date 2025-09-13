@@ -100,18 +100,18 @@ class Avatar:
         self._back.setScale(s)
         self._front.setScale(s)
 
-    def move_local(self, dx: float, dy: float, dz: float) -> None:
-        """Translate the avatar in its local coordinate space.
+    def move_world(self, dx: float, dy: float, dz: float) -> None:
+        """Translate the avatar in world coordinates.
 
-        Applies the same local-space translation to both render passes.
+        Applies the same world-space translation to both render passes.
 
         Args:
-            dx: Delta along local X.
-            dy: Delta along local Y.
-            dz: Delta along local Z.
+            dx: Delta along world X.
+            dy: Delta along world Y.
+            dz: Delta along world Z.
         """
-        self._back.setPos(self._back, dx, dy, dz)
-        self._front.setPos(self._front, dx, dy, dz)
+        self._back.setPos(dx + self._back.getX(), dy + self._back.getY(), dz + self._back.getZ())
+        self._front.setPos(dx + self._front.getX(), dy + self._front.getY(), dz + self._front.getZ())
 
     def add_hpr(self, dh: float, dp: float, dr: float) -> None:
         """Incrementally rotate the avatar by the given deltas in degrees.

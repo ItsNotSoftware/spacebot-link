@@ -10,32 +10,28 @@ class UI:
     def __init__(self, base: ShowBase):
         self.base = base
 
+        # In a2dTopLeft, the origin is at the top-left corner and
+        # positive Y goes up (off-screen). Use a small negative Y
+        # offset to move the text down into view.
         self._hud = OnscreenText(
             text=self._text(),
-            pos=(0.012, 0.95),
+            pos=(0.012, -0.08),
             align=0,
-            scale=0.045,
-            fg=(0.95, 0.95, 0.95, 0.9),
+            scale=0.055,
+            fg=(0.95, 0.95, 0.95, 0.95),
             mayChange=True,
             parent=base.a2dTopLeft,
         )
 
         # UI hotkeys
-        base.accept("f", self._toggle_wire)
         base.accept("1", lambda: self._bump_fov(-2))
         base.accept("2", lambda: self._bump_fov(+2))
 
     def _text(self) -> str:
-        return "O: orbit  F: wireframe  1/2: FOV ±2°\n"
+        return "1/2: FOV ±2°\n"
 
     def update(self, extra: str = "") -> None:
         self._hud.setText(self._text() + extra)
-
-    def _toggle_wire(self) -> None:
-        if self.base.render.hasRenderMode():
-            self.base.render.clearRenderMode()
-        else:
-            self.base.render.setRenderModeWireframe()
 
     def _bump_fov(self, delta: float) -> None:
         lens: PerspectiveLens = self.base.camLens
