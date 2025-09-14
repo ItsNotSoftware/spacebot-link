@@ -66,10 +66,14 @@ up_button_alt = KeyboardButton.space()
 down_button_alt = KeyboardButton.lshift()
 pitch_up_button = KeyboardButton.ascii_key("i")
 pitch_down_button = KeyboardButton.ascii_key("k")
-yaw_left_button = KeyboardButton.ascii_key("j")
-yaw_right_button = KeyboardButton.ascii_key("l")
-roll_left_button = KeyboardButton.ascii_key("u")
-roll_right_button = KeyboardButton.ascii_key("o")
+# Remapped per user request:
+# - U/O control Yaw (left/right)
+# - J/L control Roll (left/right)
+yaw_left_button = KeyboardButton.ascii_key("u")
+yaw_right_button = KeyboardButton.ascii_key("o")
+roll_left_button = KeyboardButton.ascii_key("j")
+roll_right_button = KeyboardButton.ascii_key("l")
+reset_orient_button = KeyboardButton.ascii_key("r")
 
 
 class SpacebotLinkApp(ShowBase):
@@ -233,8 +237,38 @@ class SpacebotLinkApp(ShowBase):
 
         pose = self.sensors.get("pose")
         if pose:
-            self.avatar.set_pos(pose.get("x", 8), pose.get("y", 0), pose.get("z", 6))
-            self.avatar.set_hpr(pose.get("h", 0), pose.get("p", 45), pose.get("r", 0))
+            # Position: only overwrite components provided by the message
+            try:
+                x = pose.get("x")
+                y = pose.get("y")
+                z = pose.get("z")
+                if x is not None or y is not None or z is not None:
+                    # Read current position from one copy (both are identical)
+                    curr_x = self.avatar._front.getX()
+                    curr_y = self.avatar._front.getY()
+                    curr_z = self.avatar._front.getZ()
+                    self.avatar.set_pos(
+                        float(x) if x is not None else float(curr_x),
+                        float(y) if y is not None else float(curr_y),
+                        float(z) if z is not None else float(curr_z),
+                    )
+            except Exception:
+                pass
+
+            # Orientation: preserve unspecified axes (avoid resetting to defaults)
+            try:
+                h_in = pose.get("h")
+                p_in = pose.get("p")
+                r_in = pose.get("r")
+                if h_in is not None or p_in is not None or r_in is not None:
+                    curr_h, curr_p, curr_r = self.avatar.get_hpr()
+                    self.avatar.set_hpr(
+                        float(h_in) if h_in is not None else curr_h,
+                        float(p_in) if p_in is not None else curr_p,
+                        float(r_in) if r_in is not None else curr_r,
+                    )
+            except Exception:
+                pass
 
         intr = self.sensors.get("intrinsics")
         if intr:
@@ -256,8 +290,8 @@ class SpacebotLinkApp(ShowBase):
     def _pool_keyboard(self, task: PythonTask):
         """Poll keyboard state and move/rotate the avatar.
 
-        WASD for planar movement, Q/E for down/up. I/K pitch, J/L yaw,
-        U/O roll. Movement is in the avatar's local space.
+        WASD for planar movement, Q/E for down/up. I/K pitch, U/O yaw,
+        J/L roll. R resets orientation. Movement is in the avatar's local space.
 
         Args:
             task: Panda3D task object.
@@ -307,6 +341,10 @@ class SpacebotLinkApp(ShowBase):
 
         if dh or dp or dr:
             self.avatar.add_hpr(dh, dp, dr)
+
+        # Reset orientation to original spawn HPR
+        if mw.is_button_down(reset_orient_button):
+            self.avatar.reset_hpr()
         return Task.cont
 
     def _hud_task(self, task: PythonTask):

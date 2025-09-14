@@ -6,6 +6,8 @@ from panda3d.core import (
     CullFaceAttrib,
     DepthOffsetAttrib,
     Point3,
+    Quat,
+    Vec3,
 )
 from direct.showbase.Loader import Loader
 from panda3d.core import NodePath
@@ -36,7 +38,7 @@ class Avatar:
         gltf_path: str,
         scale: float = 1.0,
         pos: Tuple[float, float, float] = (0, 1, 0),
-        hpr: Tuple[float, float, float] = (0, 0, 0),
+        hpr: Tuple[float, float, float] = (0, 90, 90),
     ):
         # Panda3D loader uses camelCase: loadModel
         base_np: NodePath = cast(NodePath, loader.loadModel(gltf_path))
@@ -48,6 +50,8 @@ class Avatar:
         base_np.setScale(scale)
         base_np.setPos(Point3(*pos))
         base_np.setHpr(*hpr)
+        # Remember initial orientation for resets
+        self._init_hpr: Tuple[float, float, float] = (float(hpr[0]), float(hpr[1]), float(hpr[2]))
 
         self._back = base_np.copyTo(parent)
         self._front = base_np.copyTo(parent)
@@ -87,6 +91,19 @@ class Avatar:
         self._back.setHpr(h, p, r)
         self._front.setHpr(h, p, r)
 
+    def get_hpr(self) -> Tuple[float, float, float]:
+        """Get current orientation as ``(h, p, r)`` in degrees.
+
+        Returns:
+            A tuple of heading, pitch, roll for the avatar.
+        """
+        h, p, r = self._front.getHpr()
+        return float(h), float(p), float(r)
+
+    def reset_hpr(self) -> None:
+        """Reset orientation to the original spawn HPR."""
+        self.set_hpr(*self._init_hpr)
+
     def set_scale(self, s: float) -> None:
         """Set uniform scale for both passes.
 
@@ -106,16 +123,31 @@ class Avatar:
             dy: Delta along world Y.
             dz: Delta along world Z.
         """
-        self._back.setPos(dx + self._back.getX(), dy + self._back.getY(), dz + self._back.getZ())
-        self._front.setPos(dx + self._front.getX(), dy + self._front.getY(), dz + self._front.getZ())
+        self._back.setPos(
+            dx + self._back.getX(), dy + self._back.getY(), dz + self._back.getZ()
+        )
+        self._front.setPos(
+            dx + self._front.getX(), dy + self._front.getY(), dz + self._front.getZ()
+        )
 
     def add_hpr(self, dh: float, dp: float, dr: float) -> None:
         """Incrementally rotate the avatar by the given deltas in degrees.
 
+        Applies the rotation using quaternions around the avatar's local axes
+        to avoid gimbal lock when pitch approaches ±90°.
+
         Args:
-            dh: Heading delta (yaw).
-            dp: Pitch delta.
-            dr: Roll delta.
+            dh: Heading delta (yaw) in degrees, about local +Z.
+            dp: Pitch delta in degrees, about local +X.
+            dr: Roll delta in degrees, about local +Y.
         """
-        h, p, r = self._front.getHpr()
-        self.set_hpr(h + dh, p + dp, r + dr)
+        # Current orientation (both passes share the same transform)
+        curr_q: Quat = self._front.getQuat()
+
+        # Compose delta as Panda HPR-order quaternion to match engine mapping
+        dq = Quat()
+        dq.setHpr((dh, dp, dr))
+
+        new_q = curr_q * dq  # post-multiply for local-space rotation
+        self._back.setQuat(new_q)
+        self._front.setQuat(new_q)
