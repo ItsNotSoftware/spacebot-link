@@ -1,6 +1,6 @@
 # avatar.py
 from __future__ import annotations
-from typing import Tuple
+from typing import Tuple, cast
 from panda3d.core import (
     TransparencyAttrib,
     CullFaceAttrib,
@@ -39,23 +39,19 @@ class Avatar:
         hpr: Tuple[float, float, float] = (0, 0, 0),
     ):
         # Panda3D loader uses camelCase: loadModel
-        base = loader.loadModel(gltf_path)
-        try:
-            is_empty = base.is_empty()  # type: ignore[attr-defined]
-        except Exception:
-            is_empty = False
-        if is_empty:
+        base_np: NodePath = cast(NodePath, loader.loadModel(gltf_path))
+        if base_np.isEmpty():
             raise RuntimeError(
                 f"Failed to load model (empty NodePath): {gltf_path} Make sure 'panda3d-gltf' is installed and the path is correct."
             )
 
-        base.setScale(scale)  # type: ignore
-        base.setPos(Point3(*pos))  # type: ignore
-        base.setHpr(*hpr)  # type: ignore
+        base_np.setScale(scale)
+        base_np.setPos(Point3(*pos))
+        base_np.setHpr(*hpr)
 
-        self._back = base.copy_to(parent)  # type: ignore
-        self._front = base.copy_to(parent)  # type: ignore
-        base.hide()  # type: ignore
+        self._back = base_np.copyTo(parent)
+        self._front = base_np.copyTo(parent)
+        base_np.hide()
 
         for np_ in (self._back, self._front):
             np_.setTransparency(TransparencyAttrib.MDual)

@@ -20,12 +20,15 @@ from panda3d.core import (
     KeyboardButton,
     Vec3,
     ClockObject,
+    NodePath,
+    MouseWatcher,
 )
 from collections import deque
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from math import pi, sin, cos
 from pathlib import Path
+from typing import cast, Deque, Callable, Optional
 
 from camera_stream import CameraStream
 from sensor_bus import SensorBus
@@ -44,9 +47,10 @@ loadPrcFileData("", "transparency-sort off")
 
 # Ensure glTF loader is registered (for packaged or strict environments)
 try:  # pragma: no cover - optional runtime registration
-    from panda3d_gltf import GLTFLoader  # type: ignore
+    import importlib
 
-    GLTFLoader.register_loader()
+    _gltf_mod = importlib.import_module("panda3d_gltf")
+    getattr(_gltf_mod, "GLTFLoader").register_loader()
 except Exception:
     pass
 
@@ -100,8 +104,8 @@ class SpacebotLinkApp(ShowBase):
         self.render.setLight(amb_np)
 
         # IO
-        self.camera_stream = CameraStream(cam_endpoint)
-        self.sensors = SensorBus(sensor_endpoint)
+        self.camera_stream: CameraStream = CameraStream(cam_endpoint)
+        self.sensors: SensorBus = SensorBus(sensor_endpoint)
 
         # background card
         self._make_bg_card(initial_aspect=self.camera_stream.aspect)
@@ -116,20 +120,21 @@ class SpacebotLinkApp(ShowBase):
                     / "assets"
                     / Path(gltf_model).name
                 )
-            self.avatar = Avatar(self.render, self.loader, str(model_path))
+            self.avatar: Avatar = Avatar(self.render, self.loader, str(model_path))
 
         # ui
-        self.ui = UI(self)
+        self.ui: UI = UI(self)
 
-        self._fps_samples = deque(maxlen=120)
+        self._fps_samples: Deque[float] = deque(maxlen=120)
 
         w, h = self.camera_stream.size
         fx = fy = 900.0
         cx, cy = w / 2, h / 2
         apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
         # Prevent near/far plane clipping of large or close models
-        self.camLens.setNear(0.1)
-        self.camLens.setFar(5000.0)
+        if self.camLens is not None:
+            self.camLens.setNear(0.1)
+            self.camLens.setFar(5000.0)
         self._update_bg_scale()
 
         # tasks
@@ -139,7 +144,8 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._hud_task, "HUDTask")
 
         # cleanup
-        self.exitFunc = self._cleanup
+        # Called by ShowBase when exiting (type: ignore unknown in stubs)
+        self.exitFunc: Optional[Callable[[], None]] = self._cleanup
 
     # ---- bg helpers ----
     def _make_bg_card(self, initial_aspect: float):
@@ -148,9 +154,12 @@ class SpacebotLinkApp(ShowBase):
         Args:
             initial_aspect: Initial height/width ratio used to size the card.
         """
+        if self.camera is None:
+            return
+
         cm = CardMaker("background")
         cm.setFrame(-1, 1, -initial_aspect, initial_aspect)
-        self.bg_card = self.camera.attachNewNode(cm.generate())  # type: ignore
+        self.bg_card: NodePath = self.camera.attachNewNode(cm.generate())
         self.bg_card.setScale(50)
         self.bg_card.setPos(0, 100, 0)
         self.bg_card.setBin("background", 0)
@@ -158,7 +167,7 @@ class SpacebotLinkApp(ShowBase):
         self.bg_card.setDepthWrite(False)
         self.bg_card.setDepthTest(False)
 
-        self.bg_tex = Texture("background")
+        self.bg_tex: Texture = Texture("background")
         self.bg_tex.setup2dTexture(2, 2, Texture.T_unsigned_byte, Texture.F_rgb)
         self.bg_card.setTexture(self.bg_tex)
 
@@ -173,10 +182,10 @@ class SpacebotLinkApp(ShowBase):
         to compute the required uniform scale so that the card exactly matches
         the frustum extents at that depth (no letterboxing).
         """
-        if not hasattr(self, "bg_card"):
+        if not hasattr(self, "bg_card") or self.camLens is None:
             return
         # Distance of the card from the camera (parented to camera)
-        d = abs(self.bg_card.getY())  # type: ignore
+        d = abs(self.bg_card.getY())
         # Vertical FOV in degrees -> radians
         fov_x, fov_y = self.camLens.getFov()
         fov_y_rad = fov_y * (pi / 180.0)
@@ -186,7 +195,7 @@ class SpacebotLinkApp(ShowBase):
         # so uniform scale s must satisfy: s * _bg_aspect = half_h
         if getattr(self, "_bg_aspect", 0) > 0:
             s = half_h / self._bg_aspect
-            self.bg_card.setScale(s)  # type: ignore
+            self.bg_card.setScale(s)
 
     # ---- tasks ----
     def _camera_task(self, task: PythonTask):
@@ -200,10 +209,12 @@ class SpacebotLinkApp(ShowBase):
         """
         if self.camera_stream.poll():
             rgb = self.camera_stream.frame_rgb
-            h, w = rgb.shape[:2]  # type: ignore
+            if rgb is None:
+                return Task.cont
+            h, w = rgb.shape[:2]
             # keep it simple: no dynamic card reshape; just update texture
             self.bg_tex.setup2dTexture(w, h, Texture.T_unsigned_byte, Texture.F_rgb)
-            self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")  # type: ignore
+            self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")
         return Task.cont
 
     def _sensor_task(self, task: PythonTask):
@@ -215,6 +226,9 @@ class SpacebotLinkApp(ShowBase):
         Returns:
             `direct.task.Task.cont` to continue scheduling the task.
         """
+        if not self.avatar or not self.camLens:
+            return Task.cont
+
         self.sensors.poll()
 
         pose = self.sensors.get("pose")
@@ -233,8 +247,8 @@ class SpacebotLinkApp(ShowBase):
             if all(v is not None for v in [fx, fy, cx, cy]):
                 apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
                 # Reapply clip planes after intrinsics change
-                self.camLens.setNear(0.1)  # type: ignore
-                self.camLens.setFar(5000.0)  # type: ignore
+                self.camLens.setNear(0.1)
+                self.camLens.setFar(5000.0)
                 self._update_bg_scale()
 
         return Task.cont
@@ -253,7 +267,7 @@ class SpacebotLinkApp(ShowBase):
         """
         # Time step since last frame
         dt = ClockObject.getGlobalClock().getDt()
-        mw = self.mouseWatcherNode  # type: ignore
+        mw = cast(MouseWatcher, self.mouseWatcherNode)
         if not mw:
             return Task.cont
 
