@@ -116,7 +116,6 @@ class SpacebotLinkApp(ShowBase):
         # tasks
         self.taskMgr.add(self._bus_task, "BusTask")
         self.taskMgr.add(self._camera_task, "CameraTask")
-        self.taskMgr.add(self._sensor_task, "SensorTask")
         self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
         self.taskMgr.add(self._hud_task, "HUDTask")
 
@@ -129,8 +128,8 @@ class SpacebotLinkApp(ShowBase):
         fx = fy = 900.0
         cx, cy = w / 2, h / 2
         apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
-        self.camLens.setNear(0.1)
-        self.camLens.setFar(5000.0)
+        self.camLens.setNear(0.1)  # type: ignore
+        self.camLens.setFar(5000.0)  # type: ignore
         self._update_bg_scale()
 
     def _make_bg_card(self, initial_aspect: float) -> None:
@@ -179,69 +178,6 @@ class SpacebotLinkApp(ShowBase):
             if self.bg_tex.getXSize() != w or self.bg_tex.getYSize() != h:
                 self.bg_tex.setup2dTexture(w, h, Texture.T_unsigned_byte, Texture.F_rgb)
             self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")
-        return Task.cont
-
-    def _sensor_task(self, task: "PythonTask"):
-        # Pose (optional custom topic)
-        pose = self.bus.get(TOPIC_POSE)
-        if isinstance(pose, dict):
-            try:
-                x = pose.get("x")
-                y = pose.get("y")
-                z = pose.get("z")
-                if any(v is not None for v in (x, y, z)):
-                    curr_x, curr_y, curr_z = (
-                        self.avatar._front.getX(),
-                        self.avatar._front.getY(),
-                        self.avatar._front.getZ(),
-                    )
-                    self.avatar.set_pos(
-                        float(x) if x is not None else float(curr_x),
-                        float(y) if y is not None else float(curr_y),
-                        float(z) if z is not None else float(curr_z),
-                    )
-            except Exception:
-                pass
-            try:
-                h_in = pose.get("h")
-                p_in = pose.get("p")
-                r_in = pose.get("r")
-                if any(v is not None for v in (h_in, p_in, r_in)):
-                    ch, cp, cr = self.avatar.get_hpr()
-                    self.avatar.set_hpr(
-                        float(h_in) if h_in is not None else ch,
-                        float(p_in) if p_in is not None else cp,
-                        float(r_in) if r_in is not None else cr,
-                    )
-            except Exception:
-                pass
-
-        # IMU → orientation (fallback if pose.hpr absent)
-        imu = self.bus.get(TOPIC_IMU)
-        if isinstance(imu, dict):
-            orientation = imu.get("orientation")
-            if isinstance(orientation, dict):
-                hpr = ros_orientation_to_panda_hpr(orientation)
-                if hpr:
-                    self.avatar.set_hpr(*hpr)
-
-        # Camera intrinsics
-        caminfo = self.bus.get(TOPIC_CAMINFO)
-        if isinstance(caminfo, dict):
-            try:
-                w = int(caminfo.get("width", 0))
-                h = int(caminfo.get("height", 0))
-                k = caminfo.get("k")
-                if isinstance(k, list) and len(k) >= 6 and w > 0 and h > 0:
-                    fx, fy, cx, cy = float(k[0]), float(k[4]), float(k[2]), float(k[5])
-                    apply_opencv_intrinsics_to_lens(self.camLens, w, h, fx, fy, cx, cy)
-                    self.camLens.setNear(0.1)
-                    self.camLens.setFar(5000.0)
-                    self._bg_aspect = h / max(1.0, float(w))
-                    self._update_bg_scale()
-            except (TypeError, ValueError):
-                pass
-
         return Task.cont
 
     def _pool_keyboard(self, task: "PythonTask"):
