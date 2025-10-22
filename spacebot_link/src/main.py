@@ -23,7 +23,10 @@ from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 
 from teleop_bus import TeleopBusSub
-from utils import apply_opencv_intrinsics_to_lens, ros_orientation_to_panda_hpr
+from utils import (
+    apply_opencv_intrinsics_to_lens,
+    ros_pose_to_panda_pos_hpr,
+)
 from avatar import Avatar
 from ui import UI
 
@@ -62,7 +65,7 @@ reset_orient_button = KeyboardButton.ascii_key("r")
 TOPIC_IMAGE = "/main_camera/image"
 TOPIC_CAMINFO = "/main_camera/camera_info"
 TOPIC_IMU = "/imu/data"
-TOPIC_POSE = "pose"  # optional custom topic if you publish it
+TOPIC_POSE = "/space_cobot/pose"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
@@ -116,6 +119,7 @@ class SpacebotLinkApp(ShowBase):
         # tasks
         self.taskMgr.add(self._bus_task, "BusTask")
         self.taskMgr.add(self._camera_task, "CameraTask")
+        self.taskMgr.add(self._pose_task, "PoseTask")
         self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
         self.taskMgr.add(self._hud_task, "HUDTask")
 
@@ -180,6 +184,27 @@ class SpacebotLinkApp(ShowBase):
             self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")
         return Task.cont
 
+    def _pose_task(self, task: "PythonTask"):
+        """Update camera NodePath from world-frame pose messages.
+
+        Applies transforms explicitly in the world/render space to avoid any
+        ambiguity from prior parenting or default-local ops.
+        """
+        if self.camera is None:
+            return Task.cont
+        payload = self.bus.get(TOPIC_POSE)
+        if isinstance(payload, dict):
+            parsed = ros_pose_to_panda_pos_hpr(payload)
+            if parsed is not None:
+                pos, hpr = parsed
+                print(pos)
+                # Explicitly set in world (render) space
+                self.camera.setPos(self.render, pos[0], pos[1], pos[2])
+                self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
+                # cache for HUD
+                self._last_cam_pos_hpr = (pos, hpr)
+        return Task.cont
+
     def _pool_keyboard(self, task: "PythonTask"):
         dt = ClockObject.getGlobalClock().getDt()
         mw = self.mouseWatcherNode
@@ -235,9 +260,19 @@ class SpacebotLinkApp(ShowBase):
         img = self.bus.get_image_rgb(TOPIC_IMAGE)
         if img is not None:
             rgb_h, rgb_w = img.shape[:2]
-            self.ui.update(f"Video {rgb_w}x{rgb_h} | FPS {avg_fps:.1f}")
+            pose_txt = ""
+            pos_hpr = getattr(self, "_last_cam_pos", None)
+            if pos_hpr is not None:
+                (x, y, z), (h, p, r) = pos_hpr
+                pose_txt = f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
+            self.ui.update(f"Video {rgb_w}x{rgb_h} | Pose: {pose_txt}")
         else:
-            self.ui.update(f"Waiting for video… | FPS {avg_fps:.1f}")
+            pose_txt = ""
+            pos_hpr = getattr(self, "_last_cam_pos", None)
+            if pos_hpr is not None:
+                (x, y, z), (h, p, r) = pos_hpr
+                pose_txt = f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
+            self.ui.update(f"Waiting for video… | Pose: {pose_txt}")
         return Task.cont
 
     def _cleanup(self):

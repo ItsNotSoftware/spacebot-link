@@ -23,6 +23,7 @@ class Avatar:
         pos: Tuple[float, float, float] = (0, 1, 0),
         hpr: Tuple[float, float, float] = (0, 90, 270),
     ):
+        self._parent: NodePath = parent
         base_np: NodePath = cast(NodePath, loader.loadModel(gltf_path))
         if base_np.isEmpty():
             raise RuntimeError(
@@ -54,8 +55,9 @@ class Avatar:
         self._front.setBin("fixed", 11)
 
     def set_pos(self, x: float, y: float, z: float) -> None:
-        self._back.setPos(x, y, z)
-        self._front.setPos(x, y, z)
+        # Explicitly set in parent/world space
+        self._back.setPos(self._parent, x, y, z)
+        self._front.setPos(self._parent, x, y, z)
 
     def set_hpr(self, h: float, p: float, r: float) -> None:
         self._back.setHpr(h, p, r)
@@ -73,12 +75,11 @@ class Avatar:
         self._front.setScale(s)
 
     def move_world(self, dx: float, dy: float, dz: float) -> None:
-        self._back.setPos(
-            dx + self._back.getX(), dy + self._back.getY(), dz + self._back.getZ()
-        )
-        self._front.setPos(
-            dx + self._front.getX(), dy + self._front.getY(), dz + self._front.getZ()
-        )
+        # Apply deltas in parent/world coordinates, independent of node's local HPR
+        bx, by, bz = self._back.getPos(self._parent)
+        fx, fy, fz = self._front.getPos(self._parent)
+        self._back.setPos(self._parent, bx + dx, by + dy, bz + dz)
+        self._front.setPos(self._parent, fx + dx, fy + dy, fz + dz)
 
     def add_hpr(self, dh: float, dp: float, dr: float) -> None:
         curr_q: Quat = self._front.getQuat()

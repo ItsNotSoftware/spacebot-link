@@ -58,6 +58,7 @@ class TeleopBusSub:
         return count
 
     def get(self, topic: str, default=None):
+        # Return cached value for topic; no noisy prints
         return self.latest.get(topic, default)
 
     # ---------- image helpers ----------
