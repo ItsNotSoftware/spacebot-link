@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
@@ -24,6 +24,7 @@ class TeleopBusSub:
         subscribe_prefix: Optional[bytes] = None,
         rcv_timeout_ms: int = 1,
         rcv_hwm: int = 200,
+        conflate: bool = False,
     ) -> None:
         self._ctx = zmq.Context.instance()
         self._sock = self._ctx.socket(zmq.SUB)
@@ -31,11 +32,13 @@ class TeleopBusSub:
         self._sock.setsockopt(zmq.RCVTIMEO, rcv_timeout_ms)
         self._sock.setsockopt(zmq.RCVHWM, rcv_hwm)
         self._sock.setsockopt(zmq.LINGER, 0)
+        if conflate:
+            self._sock.setsockopt(zmq.CONFLATE, 1)
         self._sock.setsockopt(zmq.SUBSCRIBE, subscribe_prefix or b"")
         self.latest: Dict[str, Any] = {}
 
     # ---------- polling & cache ----------
-    def poll(self, max_msgs: int = 50) -> int:
+    def poll(self, max_msgs: int = 1000) -> int:
         """Pump up to `max_msgs` messages from the socket into `self.latest`.
         Returns the number of processed messages.
         """
@@ -53,12 +56,10 @@ class TeleopBusSub:
                     self.latest[topic] = data
                     count += 1
             except Exception:
-                # Ignore malformed messages
                 pass
         return count
 
     def get(self, topic: str, default=None):
-        # Return cached value for topic; no noisy prints
         return self.latest.get(topic, default)
 
     # ---------- image helpers ----------
@@ -110,7 +111,6 @@ class TeleopBusSub:
             rgb = cv2.cvtColor(mono, cv2.COLOR_GRAY2RGB)
             return np.ascontiguousarray(rgb)
 
-        # Fallback: try treating payload as JPEG bytes
         img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img_bgr is None:
             return None
@@ -140,7 +140,6 @@ class TeleopBusPub:
         self._sock = self._ctx.socket(zmq.PUB)
         self._sock.setsockopt(zmq.SNDHWM, snd_hwm)
         self._sock.setsockopt(zmq.LINGER, 0)
-        # UI acts as PUB and connects; ROS bridge binds
         self._sock.connect(endpoint)
 
     def publish(self, topic: str, data: Dict[str, Any]) -> None:
@@ -148,10 +147,8 @@ class TeleopBusPub:
             msg = json.dumps({"topic": topic, "data": data})
             self._sock.send_string(msg, flags=zmq.NOBLOCK)
         except zmq.Again:
-            # drop if buffers full
             pass
         except Exception:
-            # be resilient in UI loop
             pass
 
     def close(self) -> None:

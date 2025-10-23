@@ -1,3 +1,5 @@
+# spacebot_link_app.py
+
 from __future__ import annotations
 from collections import deque
 from math import pi, sin
@@ -10,6 +12,7 @@ from panda3d.core import (
     loadPrcFileData,
     CardMaker,
     Texture,
+    TextureStage,
     DirectionalLight,
     AmbientLight,
     Vec4,
@@ -35,7 +38,6 @@ loadPrcFileData("", "window-title SpaceBotLink")
 loadPrcFileData("", "framebuffer-srgb true")
 loadPrcFileData("", "transparency-sort off")
 
-# -- try to enable glTF loader if present --
 try:
     import importlib
 
@@ -75,7 +77,8 @@ ROTATE_SPEED = 1.5
 class SpacebotLinkApp(ShowBase):
     def __init__(
         self,
-        endpoint: str = "tcp://localhost:5556",
+        sensor_endpoint: str = "tcp://localhost:5556",
+        image_endpoint: str = "tcp://localhost:5560",
         gltf_model: str = "../assets/cobot4.glb",
     ):
         super().__init__()
@@ -93,8 +96,9 @@ class SpacebotLinkApp(ShowBase):
         amb_np = self.render.attachNewNode(amb)
         self.render.setLight(amb_np)
 
-        # Single SUB for sensors/pose
-        self.bus = TeleopBusSub(endpoint)
+        # Separate SUBs for sensors and images
+        self.bus_sensors = TeleopBusSub(sensor_endpoint, rcv_hwm=200)
+        self.bus_images = TeleopBusSub(image_endpoint, rcv_hwm=1, conflate=True)
 
         # PUB for commands (UI -> robot)
         self.cmd_pub = TeleopBusPub("tcp://localhost:5557")
@@ -160,6 +164,10 @@ class SpacebotLinkApp(ShowBase):
         self.bg_tex.setup2dTexture(2, 2, Texture.T_unsigned_byte, Texture.F_rgb)
         self.bg_card.setTexture(self.bg_tex)
         self._bg_aspect = float(initial_aspect)
+        # Flip via UVs instead of flipping the pixel buffer
+        ts = TextureStage.getDefault()
+        self.bg_card.setTexScale(ts, 1, -1)
+        self.bg_card.setTexOffset(ts, 0, 1)
         self._update_bg_scale()
 
     def _update_bg_scale(self) -> None:
@@ -170,22 +178,20 @@ class SpacebotLinkApp(ShowBase):
         fov_y_rad = fov_y * (pi / 180.0)
         half_h = d * (
             sin(fov_y_rad / 2.0) / (1e-9 + (1.0 - 0.5 * (fov_y_rad**2) / 3.0))
-        )  # tan via series; stable enough
+        )
         if getattr(self, "_bg_aspect", 0) > 0:
             s = half_h / self._bg_aspect
             self.bg_card.setScale(s)
 
     # ---- tasks ----
     def _bus_task(self, task: "PythonTask"):
-        # Pump messages into cache
-        self.bus.poll(100)
+        self.bus_sensors.poll(100)
+        self.bus_images.poll(100)
         return Task.cont
 
     def _camera_task(self, task: "PythonTask"):
-        rgb = self.bus.get_image_rgb(TOPIC_IMAGE)
+        rgb = self.bus_images.get_image_rgb(TOPIC_IMAGE)
         if rgb is not None:
-            # Frames arrive with origin at bottom-left; flip so the texture matches screen space.
-            rgb = np.flipud(rgb).copy()
             h, w = rgb.shape[:2]
             if self.bg_tex.getXSize() != w or self.bg_tex.getYSize() != h:
                 self.bg_tex.setup2dTexture(w, h, Texture.T_unsigned_byte, Texture.F_rgb)
@@ -193,23 +199,15 @@ class SpacebotLinkApp(ShowBase):
         return Task.cont
 
     def _pose_task(self, task: "PythonTask"):
-        """Update camera NodePath from world-frame pose messages.
-
-        Applies transforms explicitly in the world/render space to avoid any
-        ambiguity from prior parenting or default-local ops.
-        """
         if self.camera is None:
             return Task.cont
-        payload = self.bus.get(TOPIC_POSE)
+        payload = self.bus_sensors.get(TOPIC_POSE)
         if isinstance(payload, dict):
             parsed = ros_pose_to_panda_pos_hpr(payload)
             if parsed is not None:
                 pos, hpr = parsed
-                print(pos)
-                # Explicitly set in world (render) space
                 self.camera.setPos(self.render, pos[0], pos[1], pos[2])
                 self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
-                # cache for HUD
                 self._last_cam_pos_hpr = (pos, hpr)
         return Task.cont
 
@@ -220,7 +218,6 @@ class SpacebotLinkApp(ShowBase):
             return Task.cont
 
         if not self._move_robot:
-            # Avatar movement (as before)
             move = Vec3(0, 0, 0)
             if mw.is_button_down(forward_button):
                 move.y += MOVE_SPEED * dt
@@ -256,39 +253,30 @@ class SpacebotLinkApp(ShowBase):
             if mw.is_button_down(reset_orient_button):
                 self.avatar.reset_hpr()
         else:
-            # Robot movement (publish full 6-DOF cmd_vel). Keep zero when no keys pressed.
             lin_x = lin_y = lin_z = 0.0
             ang_x = ang_y = ang_z = 0.0
 
-            # Translational:
-            #   W/S -> forward/back (x)
             if mw.is_button_down(forward_button):
                 lin_x = +MOVE_SPEED
             elif mw.is_button_down(backward_button):
                 lin_x = -MOVE_SPEED
-            #   A/D -> strafe left/right (y)
             if mw.is_button_down(left_button):
                 lin_y = +MOVE_SPEED
             elif mw.is_button_down(right_button):
                 lin_y = -MOVE_SPEED
-            #   Q/E or Shift/Space -> down/up (z)
             if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
                 lin_z = +MOVE_SPEED
             if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
                 lin_z = -MOVE_SPEED
 
-            # Rotational:
-            #   J/L -> roll (x)
             if mw.is_button_down(roll_left_button):
                 ang_x = +ROTATE_SPEED
             elif mw.is_button_down(roll_right_button):
                 ang_x = -ROTATE_SPEED
-            #   I/K -> pitch (y)
             if mw.is_button_down(pitch_up_button):
                 ang_y = +ROTATE_SPEED
             elif mw.is_button_down(pitch_down_button):
                 ang_y = -ROTATE_SPEED
-            #   U/O -> yaw (z)
             if mw.is_button_down(yaw_left_button):
                 ang_z = +ROTATE_SPEED
             elif mw.is_button_down(yaw_right_button):
@@ -307,7 +295,7 @@ class SpacebotLinkApp(ShowBase):
             else 0.0
         )
         rgb_w = rgb_h = None
-        img = self.bus.get_image_rgb(TOPIC_IMAGE)
+        img = self.bus_images.get_image_rgb(TOPIC_IMAGE)
         if img is not None:
             rgb_h, rgb_w = img.shape[:2]
             pose_txt = ""
@@ -333,7 +321,11 @@ class SpacebotLinkApp(ShowBase):
 
     def _cleanup(self):
         try:
-            self.bus.close()
+            self.bus_sensors.close()
+        except Exception:
+            pass
+        try:
+            self.bus_images.close()
         except Exception:
             pass
         try:
@@ -346,7 +338,6 @@ class SpacebotLinkApp(ShowBase):
         self._move_robot = not self._move_robot
         self.ui.set_move_target("Robot" if self._move_robot else "Avatar")
         if not self._move_robot:
-            # ensure robot is stopped when exiting robot mode
             self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def _publish_cmd_vel(
@@ -371,7 +362,6 @@ class SpacebotLinkApp(ShowBase):
     def get_camera_pose(
         self,
     ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
-        """Return camera (pos, hpr) in world coordinates, or None if unavailable."""
         if self.camera is None:
             return None
         pos_v = self.camera.getPos(self.render)
@@ -380,8 +370,9 @@ class SpacebotLinkApp(ShowBase):
         hpr = (float(hpr_v[0]), float(hpr_v[1]), float(hpr_v[2]))
         return pos, hpr
 
-    def get_avatar_pose(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """Return avatar (pos, hpr) in world coordinates."""
+    def get_avatar_pose(
+        self,
+    ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
         return self.avatar.get_pose()
 
 
