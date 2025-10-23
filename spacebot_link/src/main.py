@@ -2,7 +2,7 @@ from __future__ import annotations
 from collections import deque
 from math import pi, sin
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 
 import numpy as np
 
@@ -22,7 +22,7 @@ from panda3d.core import (
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 
-from teleop_bus import TeleopBusSub
+from teleop_bus import TeleopBusSub, TeleopBusPub
 from utils import (
     apply_opencv_intrinsics_to_lens,
     ros_pose_to_panda_pos_hpr,
@@ -66,6 +66,7 @@ TOPIC_IMAGE = "/main_camera/image"
 TOPIC_CAMINFO = "/main_camera/camera_info"
 TOPIC_IMU = "/imu/data"
 TOPIC_POSE = "/space_cobot/pose"
+TOPIC_CMD_VEL = "/space_cobot/cmd_vel"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
@@ -92,8 +93,15 @@ class SpacebotLinkApp(ShowBase):
         amb_np = self.render.attachNewNode(amb)
         self.render.setLight(amb_np)
 
-        # Single SUB for everything
+        # Single SUB for sensors/pose
         self.bus = TeleopBusSub(endpoint)
+
+        # PUB for commands (UI -> robot)
+        self.cmd_pub = TeleopBusPub("tcp://localhost:5557")
+
+        # Toggle: move avatar (default) or robot (send cmd_vel)
+        self._move_robot: bool = False
+        self.accept("t", self._toggle_move_mode)
 
         # background card
         self._make_bg_card(initial_aspect=9 / 16)
@@ -211,40 +219,82 @@ class SpacebotLinkApp(ShowBase):
         if not mw:
             return Task.cont
 
-        move = Vec3(0, 0, 0)
-        if mw.is_button_down(forward_button):
-            move.y += MOVE_SPEED * dt
-        if mw.is_button_down(backward_button):
-            move.y -= MOVE_SPEED * dt
-        if mw.is_button_down(left_button):
-            move.x -= MOVE_SPEED * dt
-        if mw.is_button_down(right_button):
-            move.x += MOVE_SPEED * dt
-        if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
-            move.z += MOVE_SPEED * dt
-        if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
-            move.z -= MOVE_SPEED * dt
-        if move.length_squared() > 0:
-            self.avatar.move_world(move.x, move.y, move.z)
+        if not self._move_robot:
+            # Avatar movement (as before)
+            move = Vec3(0, 0, 0)
+            if mw.is_button_down(forward_button):
+                move.y += MOVE_SPEED * dt
+            if mw.is_button_down(backward_button):
+                move.y -= MOVE_SPEED * dt
+            if mw.is_button_down(left_button):
+                move.x -= MOVE_SPEED * dt
+            if mw.is_button_down(right_button):
+                move.x += MOVE_SPEED * dt
+            if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
+                move.z += MOVE_SPEED * dt
+            if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
+                move.z -= MOVE_SPEED * dt
+            if move.length_squared() > 0:
+                self.avatar.move_world(move.x, move.y, move.z)
 
-        dh = dp = dr = 0.0
-        step = ROTATE_SPEED * 60.0 * dt
-        if mw.is_button_down(yaw_left_button):
-            dh += step
-        if mw.is_button_down(yaw_right_button):
-            dh -= step
-        if mw.is_button_down(pitch_up_button):
-            dp += step
-        if mw.is_button_down(pitch_down_button):
-            dp -= step
-        if mw.is_button_down(roll_left_button):
-            dr += step
-        if mw.is_button_down(roll_right_button):
-            dr -= step
-        if dh or dp or dr:
-            self.avatar.add_hpr(dh, dp, dr)
-        if mw.is_button_down(reset_orient_button):
-            self.avatar.reset_hpr()
+            dh = dp = dr = 0.0
+            step = ROTATE_SPEED * 60.0 * dt
+            if mw.is_button_down(yaw_left_button):
+                dh += step
+            if mw.is_button_down(yaw_right_button):
+                dh -= step
+            if mw.is_button_down(pitch_up_button):
+                dp += step
+            if mw.is_button_down(pitch_down_button):
+                dp -= step
+            if mw.is_button_down(roll_left_button):
+                dr += step
+            if mw.is_button_down(roll_right_button):
+                dr -= step
+            if dh or dp or dr:
+                self.avatar.add_hpr(dh, dp, dr)
+            if mw.is_button_down(reset_orient_button):
+                self.avatar.reset_hpr()
+        else:
+            # Robot movement (publish full 6-DOF cmd_vel). Keep zero when no keys pressed.
+            lin_x = lin_y = lin_z = 0.0
+            ang_x = ang_y = ang_z = 0.0
+
+            # Translational:
+            #   W/S -> forward/back (x)
+            if mw.is_button_down(forward_button):
+                lin_x = +MOVE_SPEED
+            elif mw.is_button_down(backward_button):
+                lin_x = -MOVE_SPEED
+            #   A/D -> strafe left/right (y)
+            if mw.is_button_down(left_button):
+                lin_y = +MOVE_SPEED
+            elif mw.is_button_down(right_button):
+                lin_y = -MOVE_SPEED
+            #   Q/E or Shift/Space -> down/up (z)
+            if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
+                lin_z = +MOVE_SPEED
+            if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
+                lin_z = -MOVE_SPEED
+
+            # Rotational:
+            #   J/L -> roll (x)
+            if mw.is_button_down(roll_left_button):
+                ang_x = +ROTATE_SPEED
+            elif mw.is_button_down(roll_right_button):
+                ang_x = -ROTATE_SPEED
+            #   I/K -> pitch (y)
+            if mw.is_button_down(pitch_up_button):
+                ang_y = +ROTATE_SPEED
+            elif mw.is_button_down(pitch_down_button):
+                ang_y = -ROTATE_SPEED
+            #   U/O -> yaw (z)
+            if mw.is_button_down(yaw_left_button):
+                ang_z = +ROTATE_SPEED
+            elif mw.is_button_down(yaw_right_button):
+                ang_z = -ROTATE_SPEED
+
+            self._publish_cmd_vel(lin_x, lin_y, lin_z, ang_x, ang_y, ang_z)
         return Task.cont
 
     def _hud_task(self, task: "PythonTask"):
@@ -261,18 +311,24 @@ class SpacebotLinkApp(ShowBase):
         if img is not None:
             rgb_h, rgb_w = img.shape[:2]
             pose_txt = ""
-            pos_hpr = getattr(self, "_last_cam_pos", None)
+            pos_hpr = getattr(self, "_last_cam_pos_hpr", None)
             if pos_hpr is not None:
                 (x, y, z), (h, p, r) = pos_hpr
-                pose_txt = f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
-            self.ui.update(f"Video {rgb_w}x{rgb_h} | Pose: {pose_txt}")
+                pose_txt = (
+                    f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
+                    f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
+                )
+            self.ui.update(f"Video {rgb_w}x{rgb_h} | FPS {avg_fps:.1f}{pose_txt}")
         else:
             pose_txt = ""
-            pos_hpr = getattr(self, "_last_cam_pos", None)
+            pos_hpr = getattr(self, "_last_cam_pos_hpr", None)
             if pos_hpr is not None:
                 (x, y, z), (h, p, r) = pos_hpr
-                pose_txt = f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
-            self.ui.update(f"Waiting for video… | Pose: {pose_txt}")
+                pose_txt = (
+                    f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
+                    f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
+                )
+            self.ui.update(f"Waiting for video… | FPS {avg_fps:.1f}{pose_txt}")
         return Task.cont
 
     def _cleanup(self):
@@ -280,6 +336,53 @@ class SpacebotLinkApp(ShowBase):
             self.bus.close()
         except Exception:
             pass
+        try:
+            self.cmd_pub.close()
+        except Exception:
+            pass
+
+    # ---- control helpers ----
+    def _toggle_move_mode(self) -> None:
+        self._move_robot = not self._move_robot
+        self.ui.set_move_target("Robot" if self._move_robot else "Avatar")
+        if not self._move_robot:
+            # ensure robot is stopped when exiting robot mode
+            self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    def _publish_cmd_vel(
+        self,
+        lin_x: float,
+        lin_y: float,
+        lin_z: float,
+        ang_x: float,
+        ang_y: float,
+        ang_z: float,
+    ) -> None:
+        data = {
+            "linear": {"x": float(lin_x), "y": float(lin_y), "z": float(lin_z)},
+            "angular": {"x": float(ang_x), "y": float(ang_y), "z": float(ang_z)},
+        }
+        try:
+            self.cmd_pub.publish(TOPIC_CMD_VEL, data)
+        except Exception:
+            pass
+
+    # ---- pose getters ----
+    def get_camera_pose(
+        self,
+    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        """Return camera (pos, hpr) in world coordinates, or None if unavailable."""
+        if self.camera is None:
+            return None
+        pos_v = self.camera.getPos(self.render)
+        hpr_v = self.camera.getHpr(self.render)
+        pos = (float(pos_v[0]), float(pos_v[1]), float(pos_v[2]))
+        hpr = (float(hpr_v[0]), float(hpr_v[1]), float(hpr_v[2]))
+        return pos, hpr
+
+    def get_avatar_pose(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """Return avatar (pos, hpr) in world coordinates."""
+        return self.avatar.get_pose()
 
 
 if __name__ == "__main__":

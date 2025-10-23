@@ -22,6 +22,7 @@ class UI:
     def __init__(self, base: ShowBase):
         self.base = base
         self.mode: str = "Follow Mode"
+        self.move_target: str = "Avatar"  # "Avatar" or "Robot"
 
         self._hud = OnscreenText(
             text=self._text(),
@@ -39,7 +40,7 @@ class UI:
         self._build_mode_selector()
 
     def _text(self) -> str:
-        return f"1/2: FOV ±2°\nMode: {self.mode}\n"
+        return f"1/2: FOV ±2°  |  t: Toggle Move Target\nMode: {self.mode}  |  Move: {self.move_target}\n"
 
     def update(self, extra: str = "") -> None:
         self._hud.setText(self._text() + extra)
@@ -251,4 +252,9 @@ class UI:
             self._sel, 0.12, (target_x, 0, 0), blendType="easeInOut"
         )
         self._sel_anim.start()
+        self.update("")
+
+    def set_move_target(self, target: str) -> None:
+        """Update the move target label in the HUD ("Avatar" or "Robot")."""
+        self.move_target = target
         self.update("")

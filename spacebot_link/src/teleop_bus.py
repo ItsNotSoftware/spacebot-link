@@ -121,3 +121,41 @@ class TeleopBusSub:
             self._sock.close(0)
         except Exception:
             pass
+
+
+class TeleopBusPub:
+    """
+    Minimal ZMQ PUB socket that sends JSON blobs:
+        {"topic": "/topic", "data": {...}}
+
+    Intended for UI -> robot command messages (e.g., /space_cobot/cmd_vel).
+    """
+
+    def __init__(
+        self,
+        endpoint: str = "tcp://localhost:5557",
+        snd_hwm: int = 1000,
+    ) -> None:
+        self._ctx = zmq.Context.instance()
+        self._sock = self._ctx.socket(zmq.PUB)
+        self._sock.setsockopt(zmq.SNDHWM, snd_hwm)
+        self._sock.setsockopt(zmq.LINGER, 0)
+        # UI acts as PUB and connects; ROS bridge binds
+        self._sock.connect(endpoint)
+
+    def publish(self, topic: str, data: Dict[str, Any]) -> None:
+        try:
+            msg = json.dumps({"topic": topic, "data": data})
+            self._sock.send_string(msg, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            # drop if buffers full
+            pass
+        except Exception:
+            # be resilient in UI loop
+            pass
+
+    def close(self) -> None:
+        try:
+            self._sock.close(0)
+        except Exception:
+            pass

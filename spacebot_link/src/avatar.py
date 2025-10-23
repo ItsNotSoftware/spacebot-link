@@ -67,6 +67,17 @@ class Avatar:
         h, p, r = self._front.getHpr()
         return float(h), float(p), float(r)
 
+    def get_pos(self) -> Tuple[float, float, float]:
+        """Return avatar position in world/parent coordinates."""
+        x, y, z = self._front.getPos(self._parent)
+        return float(x), float(y), float(z)
+
+    def get_pose(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """Return avatar (pos, hpr) in world/parent coordinates."""
+        px, py, pz = self._front.getPos(self._parent)
+        h, p, r = self._front.getHpr(self._parent)
+        return (float(px), float(py), float(pz)), (float(h), float(p), float(r))
+
     def reset_hpr(self) -> None:
         self.set_hpr(*self._init_hpr)
 
