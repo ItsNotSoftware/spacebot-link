@@ -1,6 +1,8 @@
-# spacebot_link_app.py
-
 from __future__ import annotations
+import argparse
+import cProfile
+import io
+import pstats
 from collections import deque
 from math import pi, sin
 from pathlib import Path
@@ -80,6 +82,7 @@ class SpacebotLinkApp(ShowBase):
         sensor_endpoint: str = "tcp://localhost:5556",
         image_endpoint: str = "tcp://localhost:5560",
         gltf_model: str = "../assets/cobot4.glb",
+        cmd_endpoint: str = "tcp://localhost:5557",
     ):
         super().__init__()
         self.disableMouse()
@@ -101,7 +104,7 @@ class SpacebotLinkApp(ShowBase):
         self.bus_images = TeleopBusSub(image_endpoint, rcv_hwm=1, conflate=True)
 
         # PUB for commands (UI -> robot)
-        self.cmd_pub = TeleopBusPub("tcp://localhost:5557")
+        self.cmd_pub = TeleopBusPub(cmd_endpoint)
 
         # Toggle: move avatar (default) or robot (send cmd_vel)
         self._move_robot: bool = False
@@ -376,6 +379,99 @@ class SpacebotLinkApp(ShowBase):
         return self.avatar.get_pose()
 
 
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="SpacebotLink teleoperation UI")
+    parser.add_argument(
+        "--sensor-endpoint",
+        default="tcp://localhost:5556",
+        help="ZMQ SUB endpoint for telemetry topics (pose, imu, etc).",
+    )
+    parser.add_argument(
+        "--image-endpoint",
+        default="tcp://localhost:5560",
+        help="ZMQ SUB endpoint for image frames (typically conflated).",
+    )
+    parser.add_argument(
+        "--cmd-endpoint",
+        default="tcp://localhost:5557",
+        help="ZMQ PUB endpoint for command bus (UI connects).",
+    )
+    parser.add_argument(
+        "--gltf-model",
+        default="../assets/cobot4.glb",
+        help="Path to the glTF avatar model to load.",
+    )
+    parser.add_argument(
+        "--profile",
+        nargs="?",
+        const="spacebot_profile.prof",
+        help=(
+            "Enable cProfile; optionally provide a destination file. Use '-' to "
+            "print a summary to stdout."
+        ),
+    )
+    parser.add_argument(
+        "--profile-sort",
+        default="cumtime",
+        help="Sort key for profile stats (e.g. cumtime, tottime, ncalls).",
+    )
+    parser.add_argument(
+        "--profile-top",
+        type=int,
+        default=30,
+        help="How many rows to show when printing stats (<=0 prints all).",
+    )
+    return parser.parse_args(argv)
+
+
+def _run_with_profile(
+    app: SpacebotLinkApp, destination: str, sort_key: str, top: int
+) -> None:
+    profiler = cProfile.Profile()
+    try:
+        profiler.enable()
+        app.run()
+    finally:
+        profiler.disable()
+        lines = top if isinstance(top, int) and top > 0 else None
+        is_stdout = destination in ("-", "stdout", None)
+        if is_stdout:
+            stream = io.StringIO()
+            stats = pstats.Stats(profiler, stream=stream)
+            try:
+                stats.sort_stats(sort_key)
+            except Exception:
+                stats.sort_stats("cumtime")
+            stats.print_stats(lines)
+            print(stream.getvalue())
+        else:
+            try:
+                profiler.dump_stats(destination)
+                print(f"[profile] Wrote stats to {destination}")
+            except Exception as exc:
+                stream = io.StringIO()
+                stats = pstats.Stats(profiler, stream=stream)
+                stats.sort_stats("cumtime")
+                stats.print_stats(lines)
+                print(
+                    f"[profile] Failed to write stats to {destination}: {exc}\n"
+                    f"Falling back to stdout:\n{stream.getvalue()}"
+                )
+
+
+def main(argv=None) -> None:
+    args = _parse_args(argv)
+    app = SpacebotLinkApp(
+        sensor_endpoint=args.sensor_endpoint,
+        image_endpoint=args.image_endpoint,
+        gltf_model=args.gltf_model,
+        cmd_endpoint=args.cmd_endpoint,
+    )
+    if args.profile:
+        _run_with_profile(app, args.profile, args.profile_sort, args.profile_top)
+    else:
+        app.run()
+
+
 if __name__ == "__main__":
-    app = SpacebotLinkApp()
-    app.run()
+    main()
