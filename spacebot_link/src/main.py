@@ -1,8 +1,4 @@
 from __future__ import annotations
-import argparse
-import cProfile
-import io
-import pstats
 from collections import deque
 from math import asin, atan2, degrees, pi, sin
 from pathlib import Path
@@ -34,6 +30,7 @@ from teleop_bus import TeleopBusSub, TeleopBusPub
 from utils import (
     apply_opencv_intrinsics_to_lens,
     ros_pose_to_panda_pos_hpr,
+    panda_pose_to_ros,
 )
 from avatar import Avatar
 from ui import UI
@@ -74,6 +71,7 @@ TOPIC_CAMINFO = "/main_camera/camera_info"
 TOPIC_IMU = "/imu/data"
 TOPIC_POSE = "/space_cobot/pose"
 TOPIC_CMD_VEL = "/space_cobot/cmd_vel"
+TOPIC_GOAL = "/nav6d/goal"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
@@ -84,7 +82,7 @@ class SpacebotLinkApp(ShowBase):
         self,
         sensor_endpoint: str = "tcp://localhost:5556",
         image_endpoint: str = "tcp://localhost:5560",
-        gltf_model: str = "../assets/cobot4.glb",
+        gltf_model: str = "../assets/cobot_ghost.glb",
         cmd_endpoint: str = "tcp://localhost:5557",
     ):
         super().__init__()
@@ -134,6 +132,11 @@ class SpacebotLinkApp(ShowBase):
         self._last_ros_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = None
+        self._last_ros_orientation: Optional[dict] = None
+        self._last_goal_pub_time: float = 0.0
+        self._last_goal_pose: Optional[
+            Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = None
         self._imgui_ready: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
@@ -145,6 +148,7 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._pose_task, "PoseTask")
         self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
         self.taskMgr.add(self._metrics_task, "MetricsTask")
+        self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
 
         self._init_imgui()
 
@@ -202,6 +206,27 @@ class SpacebotLinkApp(ShowBase):
         self.bus_images.poll(100)
         return Task.cont
 
+    def _goal_publish_task(self, task: "PythonTask"):
+        if not self._goal_publishing_enabled:
+            return Task.cont
+
+        pose = self.avatar.get_pose()
+        if not self._pose_changed_since_last_goal(pose):
+            return Task.cont
+
+        ros_pose = panda_pose_to_ros(pose)
+        if ros_pose is None:
+            return Task.cont
+
+        msg = {"header": {"frame_id": "map"}, "pose": ros_pose}
+        try:
+            self.cmd_pub.publish(TOPIC_GOAL, msg)
+            self._last_goal_pose = pose
+        except Exception:
+            pass
+
+        return Task.cont
+
     def _camera_task(self, task: "PythonTask"):
         rgb = self.bus_images.get_image_rgb(TOPIC_IMAGE)
         if rgb is not None:
@@ -216,7 +241,9 @@ class SpacebotLinkApp(ShowBase):
         if isinstance(payload, dict):
             ros_pose = self._extract_ros_pose(payload)
             if ros_pose is not None:
-                self._last_ros_pose = ros_pose
+                pos, rpy, ori = ros_pose
+                self._last_ros_pose = (pos, rpy)
+                self._last_ros_orientation = ori
             if self.camera is not None:
                 parsed = ros_pose_to_panda_pos_hpr(payload)
                 if parsed is not None:
@@ -359,7 +386,7 @@ class SpacebotLinkApp(ShowBase):
 
     def _extract_ros_pose(
         self, payload: dict
-    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float], dict]]:
         pose = payload.get("pose") if isinstance(payload, dict) else None
         if isinstance(pose, dict):
             position = pose.get("position")
@@ -390,7 +417,13 @@ class SpacebotLinkApp(ShowBase):
         )
         if rpy is None:
             return None
-        return pos, rpy
+        ori = {
+            "x": float(orientation.get("x")),
+            "y": float(orientation.get("y")),
+            "z": float(orientation.get("z")),
+            "w": float(orientation.get("w")),
+        }
+        return pos, rpy, ori
 
     def _quat_to_rpy_deg(
         self, qx: float, qy: float, qz: float, qw: float
@@ -420,6 +453,31 @@ class SpacebotLinkApp(ShowBase):
         yaw = atan2(siny_cosp, cosy_cosp)
         return (degrees(roll), degrees(pitch), degrees(yaw))
 
+    def _pose_changed_since_last_goal(
+        self,
+        pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+        pos_eps: float = 1e-4,
+        hpr_eps: float = 1e-3,
+    ) -> bool:
+        if self._last_goal_pose is None:
+            return True
+        (x1, y1, z1), (h1, p1, r1) = self._last_goal_pose
+        (x2, y2, z2), (h2, p2, r2) = pose
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        dz = abs(z2 - z1)
+        dh = abs(h2 - h1)
+        dp = abs(p2 - p1)
+        dr = abs(r2 - r1)
+        return (
+            (dx > pos_eps)
+            or (dy > pos_eps)
+            or (dz > pos_eps)
+            or (dh > hpr_eps)
+            or (dp > hpr_eps)
+            or (dr > hpr_eps)
+        )
+
     # ---- pose getters ----
     def get_camera_pose(
         self,
@@ -442,8 +500,9 @@ class SpacebotLinkApp(ShowBase):
         try:
             p3dimgui.init()
             style = imgui.get_style()
-            style.font_scale_main = 2.0
-            style.scale_all_sizes(2.0)
+            style.font_size_base = 22.0  # request larger base font size
+            style.font_scale_main = 1.25
+            style.scale_all_sizes(1.25)
         except Exception as exc:
             print(f"[imgui] Failed to initialize ImGui overlay: {exc}")
             self._imgui_ready = False
@@ -456,19 +515,46 @@ class SpacebotLinkApp(ShowBase):
         if not self._imgui_ready:
             return
 
-        imgui.set_next_window_size((360, 180), imgui.Cond_.once)
+        imgui.set_next_window_size((520, 260), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
         fps_text = self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate
         imgui.text(f"FPS: {fps_text:.1f}")
 
+        imgui.spacing()
+        imgui.text("Avatar pose")
+        av_pos, av_hpr = self.avatar.get_pose()
+        av_ros = panda_pose_to_ros((av_pos, av_hpr))
+        if av_ros is not None:
+            pos_ros = av_ros["position"]
+            imgui.text(
+                f"  position (m):  {pos_ros['x']:.2f}, {pos_ros['y']:.2f}, {pos_ros['z']:.2f}"
+            )
+            rpy_ros = self._quat_to_rpy_deg(
+                av_ros["orientation"]["x"],
+                av_ros["orientation"]["y"],
+                av_ros["orientation"]["z"],
+                av_ros["orientation"]["w"],
+            )
+            if rpy_ros is not None:
+                roll, pitch, yaw = rpy_ros
+                imgui.text(
+                    f"  orientation (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}"
+                )
+
+        imgui.spacing()
+        imgui.text("Robot pose (/space_cobot/pose)")
         if self._last_ros_pose is not None:
-            (x, y, z), (roll, pitch, yaw) = self._last_ros_pose
-            imgui.text(f"Pose (ROS xyz m): {x:.2f}, {y:.2f}, {z:.2f}")
-            imgui.text(f"RPY (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}")
+            (x, y, z), rpy = self._last_ros_pose
+            imgui.text(f"  position (m):  {x:.2f}, {y:.2f}, {z:.2f}")
+            if rpy is not None:
+                roll, pitch, yaw = rpy
+                imgui.text(
+                    f"  orientation (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}"
+                )
         else:
-            imgui.text("Pose: waiting for /space_cobot/pose")
+            imgui.text("  waiting for /space_cobot/pose")
 
         imgui.separator()
         changed_move, move_robot = imgui.checkbox(
@@ -486,98 +572,9 @@ class SpacebotLinkApp(ShowBase):
         imgui.end()
 
 
-def _parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="SpacebotLink teleoperation UI")
-    parser.add_argument(
-        "--sensor-endpoint",
-        default="tcp://localhost:5556",
-        help="ZMQ SUB endpoint for telemetry topics (pose, imu, etc).",
-    )
-    parser.add_argument(
-        "--image-endpoint",
-        default="tcp://localhost:5560",
-        help="ZMQ SUB endpoint for image frames (typically conflated).",
-    )
-    parser.add_argument(
-        "--cmd-endpoint",
-        default="tcp://localhost:5557",
-        help="ZMQ PUB endpoint for command bus (UI connects).",
-    )
-    parser.add_argument(
-        "--gltf-model",
-        default="../assets/cobot4.glb",
-        help="Path to the glTF avatar model to load.",
-    )
-    parser.add_argument(
-        "--profile",
-        nargs="?",
-        const="spacebot_profile.prof",
-        help=(
-            "Enable cProfile; optionally provide a destination file. Use '-' to "
-            "print a summary to stdout."
-        ),
-    )
-    parser.add_argument(
-        "--profile-sort",
-        default="cumtime",
-        help="Sort key for profile stats (e.g. cumtime, tottime, ncalls).",
-    )
-    parser.add_argument(
-        "--profile-top",
-        type=int,
-        default=30,
-        help="How many rows to show when printing stats (<=0 prints all).",
-    )
-    return parser.parse_args(argv)
-
-
-def _run_with_profile(
-    app: SpacebotLinkApp, destination: str, sort_key: str, top: int
-) -> None:
-    profiler = cProfile.Profile()
-    try:
-        profiler.enable()
-        app.run()
-    finally:
-        profiler.disable()
-        lines = top if isinstance(top, int) and top > 0 else None
-        is_stdout = destination in ("-", "stdout", None)
-        if is_stdout:
-            stream = io.StringIO()
-            stats = pstats.Stats(profiler, stream=stream)
-            try:
-                stats.sort_stats(sort_key)
-            except Exception:
-                stats.sort_stats("cumtime")
-            stats.print_stats(lines)
-            print(stream.getvalue())
-        else:
-            try:
-                profiler.dump_stats(destination)
-                print(f"[profile] Wrote stats to {destination}")
-            except Exception as exc:
-                stream = io.StringIO()
-                stats = pstats.Stats(profiler, stream=stream)
-                stats.sort_stats("cumtime")
-                stats.print_stats(lines)
-                print(
-                    f"[profile] Failed to write stats to {destination}: {exc}\n"
-                    f"Falling back to stdout:\n{stream.getvalue()}"
-                )
-
-
 def main(argv=None) -> None:
-    args = _parse_args(argv)
-    app = SpacebotLinkApp(
-        sensor_endpoint=args.sensor_endpoint,
-        image_endpoint=args.image_endpoint,
-        gltf_model=args.gltf_model,
-        cmd_endpoint=args.cmd_endpoint,
-    )
-    if args.profile:
-        _run_with_profile(app, args.profile, args.profile_sort, args.profile_top)
-    else:
-        app.run()
+    app = SpacebotLinkApp()
+    app.run()
 
 
 if __name__ == "__main__":
