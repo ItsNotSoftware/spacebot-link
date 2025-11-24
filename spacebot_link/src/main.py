@@ -4,7 +4,7 @@ import cProfile
 import io
 import pstats
 from collections import deque
-from math import pi, sin
+from math import asin, atan2, degrees, pi, sin
 from pathlib import Path
 from typing import Optional, Callable, Tuple
 
@@ -26,6 +26,9 @@ from panda3d.core import (
 )
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
+
+import p3dimgui
+from imgui_bundle import imgui
 
 from teleop_bus import TeleopBusSub, TeleopBusPub
 from utils import (
@@ -108,7 +111,7 @@ class SpacebotLinkApp(ShowBase):
 
         # Toggle: move avatar (default) or robot (send cmd_vel)
         self._move_robot: bool = False
-        self.accept("t", self._toggle_move_mode)
+        self._goal_publishing_enabled: bool = True
 
         # background card
         self._make_bg_card(initial_aspect=9 / 16)
@@ -127,6 +130,11 @@ class SpacebotLinkApp(ShowBase):
         # ui
         self.ui: UI = UI(self)
         self._fps_samples = deque(maxlen=120)
+        self._avg_fps: float = 0.0
+        self._last_ros_pose: Optional[
+            Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = None
+        self._imgui_ready: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -136,7 +144,9 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._camera_task, "CameraTask")
         self.taskMgr.add(self._pose_task, "PoseTask")
         self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
-        self.taskMgr.add(self._hud_task, "HUDTask")
+        self.taskMgr.add(self._metrics_task, "MetricsTask")
+
+        self._init_imgui()
 
         # cleanup
         self.exitFunc: Optional[Callable[[], None]] = self._cleanup
@@ -202,16 +212,18 @@ class SpacebotLinkApp(ShowBase):
         return Task.cont
 
     def _pose_task(self, task: "PythonTask"):
-        if self.camera is None:
-            return Task.cont
         payload = self.bus_sensors.get(TOPIC_POSE)
         if isinstance(payload, dict):
-            parsed = ros_pose_to_panda_pos_hpr(payload)
-            if parsed is not None:
-                pos, hpr = parsed
-                self.camera.setPos(self.render, pos[0], pos[1], pos[2])
-                self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
-                self._last_cam_pos_hpr = (pos, hpr)
+            ros_pose = self._extract_ros_pose(payload)
+            if ros_pose is not None:
+                self._last_ros_pose = ros_pose
+            if self.camera is not None:
+                parsed = ros_pose_to_panda_pos_hpr(payload)
+                if parsed is not None:
+                    pos, hpr = parsed
+                    self.camera.setPos(self.render, pos[0], pos[1], pos[2])
+                    self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
+                    self._last_cam_pos_hpr = (pos, hpr)
         return Task.cont
 
     def _pool_keyboard(self, task: "PythonTask"):
@@ -288,38 +300,15 @@ class SpacebotLinkApp(ShowBase):
             self._publish_cmd_vel(lin_x, lin_y, lin_z, ang_x, ang_y, ang_z)
         return Task.cont
 
-    def _hud_task(self, task: "PythonTask"):
+    def _metrics_task(self, task: "PythonTask"):
         dt = ClockObject.getGlobalClock().getDt()
         if dt > 1e-6:
             self._fps_samples.append(1.0 / dt)
-        avg_fps = (
+        self._avg_fps = (
             (sum(self._fps_samples) / len(self._fps_samples))
             if self._fps_samples
             else 0.0
         )
-        rgb_w = rgb_h = None
-        img = self.bus_images.get_image_rgb(TOPIC_IMAGE)
-        if img is not None:
-            rgb_h, rgb_w = img.shape[:2]
-            pose_txt = ""
-            pos_hpr = getattr(self, "_last_cam_pos_hpr", None)
-            if pos_hpr is not None:
-                (x, y, z), (h, p, r) = pos_hpr
-                pose_txt = (
-                    f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
-                    f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
-                )
-            self.ui.update(f"Video {rgb_w}x{rgb_h} | FPS {avg_fps:.1f}{pose_txt}")
-        else:
-            pose_txt = ""
-            pos_hpr = getattr(self, "_last_cam_pos_hpr", None)
-            if pos_hpr is not None:
-                (x, y, z), (h, p, r) = pos_hpr
-                pose_txt = (
-                    f" | Cam pos (m) [{x:.2f}, {y:.2f}, {z:.2f}]"
-                    f" HPR (deg) [{h:.1f}, {p:.1f}, {r:.1f}]"
-                )
-            self.ui.update(f"Waiting for video… | FPS {avg_fps:.1f}{pose_txt}")
         return Task.cont
 
     def _cleanup(self):
@@ -337,11 +326,18 @@ class SpacebotLinkApp(ShowBase):
             pass
 
     # ---- control helpers ----
-    def _toggle_move_mode(self) -> None:
-        self._move_robot = not self._move_robot
+    def _set_move_mode(self, move_robot: bool) -> None:
+        """Switch between avatar movement and sending cmd_vel to the robot."""
+        move_robot = bool(move_robot)
+        if move_robot == self._move_robot:
+            return
+        self._move_robot = move_robot
         self.ui.set_move_target("Robot" if self._move_robot else "Avatar")
         if not self._move_robot:
             self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    def _toggle_move_mode(self) -> None:
+        self._set_move_mode(not self._move_robot)
 
     def _publish_cmd_vel(
         self,
@@ -361,6 +357,69 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             pass
 
+    def _extract_ros_pose(
+        self, payload: dict
+    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        pose = payload.get("pose") if isinstance(payload, dict) else None
+        if isinstance(pose, dict):
+            position = pose.get("position")
+            orientation = pose.get("orientation")
+        else:
+            position = payload.get("position") if isinstance(payload, dict) else None
+            orientation = (
+                payload.get("orientation") if isinstance(payload, dict) else None
+            )
+
+        if not isinstance(position, dict) or not isinstance(orientation, dict):
+            return None
+
+        try:
+            pos = (
+                float(position.get("x")),
+                float(position.get("y")),
+                float(position.get("z")),
+            )
+        except (TypeError, ValueError):
+            return None
+
+        rpy = self._quat_to_rpy_deg(
+            orientation.get("x"),
+            orientation.get("y"),
+            orientation.get("z"),
+            orientation.get("w"),
+        )
+        if rpy is None:
+            return None
+        return pos, rpy
+
+    def _quat_to_rpy_deg(
+        self, qx: float, qy: float, qz: float, qw: float
+    ) -> Optional[Tuple[float, float, float]]:
+        try:
+            qx = float(qx)
+            qy = float(qy)
+            qz = float(qz)
+            qw = float(qw)
+        except (TypeError, ValueError):
+            return None
+
+        sinr_cosp = 2.0 * (qw * qx + qy * qz)
+        cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+        roll = atan2(sinr_cosp, cosr_cosp)
+
+        sinp = 2.0 * (qw * qy - qz * qx)
+        if sinp >= 1.0:
+            pitch = pi / 2.0
+        elif sinp <= -1.0:
+            pitch = -pi / 2.0
+        else:
+            pitch = asin(sinp)
+
+        siny_cosp = 2.0 * (qw * qz + qx * qy)
+        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+        yaw = atan2(siny_cosp, cosy_cosp)
+        return (degrees(roll), degrees(pitch), degrees(yaw))
+
     # ---- pose getters ----
     def get_camera_pose(
         self,
@@ -377,6 +436,54 @@ class SpacebotLinkApp(ShowBase):
         self,
     ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
         return self.avatar.get_pose()
+
+    # ---- debug UI ----
+    def _init_imgui(self) -> None:
+        try:
+            p3dimgui.init()
+            style = imgui.get_style()
+            style.font_scale_main = 2.0
+            style.scale_all_sizes(2.0)
+        except Exception as exc:
+            print(f"[imgui] Failed to initialize ImGui overlay: {exc}")
+            self._imgui_ready = False
+            return
+
+        self._imgui_ready = True
+        self.accept("imgui-new-frame", self._draw_debug_ui)
+
+    def _draw_debug_ui(self) -> None:
+        if not self._imgui_ready:
+            return
+
+        imgui.set_next_window_size((360, 180), imgui.Cond_.once)
+        imgui.set_next_window_bg_alpha(0.92)
+        imgui.begin("Debug")
+
+        fps_text = self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate
+        imgui.text(f"FPS: {fps_text:.1f}")
+
+        if self._last_ros_pose is not None:
+            (x, y, z), (roll, pitch, yaw) = self._last_ros_pose
+            imgui.text(f"Pose (ROS xyz m): {x:.2f}, {y:.2f}, {z:.2f}")
+            imgui.text(f"RPY (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}")
+        else:
+            imgui.text("Pose: waiting for /space_cobot/pose")
+
+        imgui.separator()
+        changed_move, move_robot = imgui.checkbox(
+            "Control robot (publish cmd_vel)", self._move_robot
+        )
+        if changed_move:
+            self._set_move_mode(move_robot)
+
+        changed_goal, publish_goals = imgui.checkbox(
+            "Publish goals", self._goal_publishing_enabled
+        )
+        if changed_goal:
+            self._goal_publishing_enabled = publish_goals
+
+        imgui.end()
 
 
 def _parse_args(argv=None):
