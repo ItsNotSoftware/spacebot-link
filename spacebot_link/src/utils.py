@@ -19,6 +19,7 @@ __all__ = [
     "ros_orientation_to_panda_hpr",
     "ros_position_to_panda_pos",
     "ros_pose_to_panda_pos_hpr",
+    "panda_pose_to_ros",
 ]
 
 
@@ -143,3 +144,45 @@ def ros_pose_to_panda_pos_hpr(
     if pos is None or hpr is None:
         return None
     return pos, hpr
+
+
+def panda_pose_to_ros(
+    pos_hpr: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+) -> Optional[Dict[str, Dict[str, float]]]:
+    """Convert Panda3D (pos, hpr) to a ROS-style pose dict (position + quaternion).
+
+    Input: ((x_p, y_p, z_p), (h, p, r)) in Panda3D coordinates.
+    Output:
+        {
+          "position": {"x": X_r, "y": Y_r, "z": Z_r},
+          "orientation": {"x": qx, "y": qy, "z": qz, "w": qw},
+        }
+    using ROS ENU convention.
+    """
+    try:
+        (x_p, y_p, z_p), (h, p, r) = pos_hpr
+    except Exception:
+        return None
+
+    pos_ros = {"x": float(y_p), "y": float(-x_p), "z": float(z_p)}
+
+    try:
+        quat_panda = Quat()
+        quat_panda.setHpr((h, p, r))
+        # Panda3D quaternions expose scalar via getR(), vector via getI/J/K().
+        q_p = (
+            quat_panda.getR(),
+            quat_panda.getI(),
+            quat_panda.getJ(),
+            quat_panda.getK(),
+        )
+        q_ros = _quat_multiply(
+            _quat_conjugate(_ROS_TO_PANDA_ROT),
+            _quat_multiply(q_p, _ROS_TO_PANDA_ROT),
+        )
+        qw, qx, qy, qz = q_ros
+    except Exception:
+        return None
+
+    ori_ros = {"x": float(qx), "y": float(qy), "z": float(qz), "w": float(qw)}
+    return {"position": pos_ros, "orientation": ori_ros}
