@@ -1,5 +1,4 @@
 from __future__ import annotations
-from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import DirectFrame, DirectButton
 from direct.gui import DirectGuiGlobals as DGG
 from panda3d.core import (
@@ -23,27 +22,15 @@ class UI:
         self.base = base
         self.mode: str = "Follow Mode"
         self.move_target: str = "Avatar"  # "Avatar" or "Robot"
-
-        self._hud = OnscreenText(
-            text=self._text(),
-            pos=(0.012, -0.08),
-            align=0,
-            scale=0.055,
-            fg=(0.95, 0.95, 0.95, 0.95),
-            mayChange=True,
-            parent=base.a2dTopLeft,
-        )
+        self._last_status: str = ""
 
         base.accept("1", lambda: self._bump_fov(-2))
         base.accept("2", lambda: self._bump_fov(+2))
 
         self._build_mode_selector()
 
-    def _text(self) -> str:
-        return f"1/2: FOV ±2°  |  t: Toggle Move Target\nMode: {self.mode}  |  Move: {self.move_target}\n"
-
     def update(self, extra: str = "") -> None:
-        self._hud.setText(self._text() + extra)
+        self._last_status = extra
 
     def _bump_fov(self, delta: float) -> None:
         lens: PerspectiveLens = self.base.camLens

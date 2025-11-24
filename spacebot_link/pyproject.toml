@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.2.4",
     "opencv-python>=4.11.0.86",
     "panda3d>=1.10.15",
+    "panda3d-imgui>=1.0.2",
     "pyglm>=2.8.0",
     "zmq>=0.0.0",
 ]
