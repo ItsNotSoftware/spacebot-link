@@ -20,7 +20,7 @@ class Avatar:
         loader: Loader,
         gltf_path: str,
         scale: float = 1.0,
-        pos: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+        pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         hpr: Tuple[float, float, float] = (0, 0, 0),
     ):
         self._parent: NodePath = parent

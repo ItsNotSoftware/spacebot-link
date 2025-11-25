@@ -1,8 +1,8 @@
 from __future__ import annotations
 from collections import deque
-from math import asin, atan2, degrees, pi, sin
+from math import asin, atan2, degrees, pi, sin, sqrt
 from pathlib import Path
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable, Tuple, Sequence, Dict, List
 
 import numpy as np
 
@@ -72,6 +72,7 @@ TOPIC_IMU = "/imu/data"
 TOPIC_POSE = "/space_cobot/pose"
 TOPIC_CMD_VEL = "/space_cobot/cmd_vel"
 TOPIC_GOAL = "/nav6d/goal"
+TOPIC_PATH = "/nav6d/planner/path"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
@@ -84,7 +85,8 @@ class SpacebotLinkApp(ShowBase):
         image_endpoint: str = "tcp://localhost:5560",
         gltf_model: str = "../assets/cobot_ghost.glb",
         cmd_endpoint: str = "tcp://localhost:5557",
-    ):
+    ) -> None:
+        """Initialize app wiring, assets, networking, and tasks."""
         super().__init__()
         self.disableMouse()
         self.render.setShaderAuto()
@@ -111,6 +113,12 @@ class SpacebotLinkApp(ShowBase):
         self._move_robot: bool = False
         self._goal_publishing_enabled: bool = True
 
+        # path ghosts
+        self._path_markers: List[NodePath] = []
+        self._path_proto: Optional[NodePath] = None
+        self._path_proto_failed: bool = False
+        self._last_path_data: Optional[Dict] = None
+
         # background card
         self._make_bg_card(initial_aspect=9 / 16)
 
@@ -132,7 +140,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_ros_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = None
-        self._last_ros_orientation: Optional[dict] = None
+        self._last_ros_orientation: Optional[Dict[str, float]] = None
         self._last_goal_pub_time: float = 0.0
         self._last_goal_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -149,6 +157,7 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._pool_keyboard, "PoolKeyboard")
         self.taskMgr.add(self._metrics_task, "MetricsTask")
         self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
+        self.taskMgr.add(self._path_task, "PathTask")
 
         self._init_imgui()
 
@@ -157,6 +166,7 @@ class SpacebotLinkApp(ShowBase):
 
     # ---- lens / bg helpers ----
     def _init_default_lens(self) -> None:
+        """Seed a reasonable default lens configuration until camera info arrives."""
         w, h = 1280, 720
         fx = fy = 900.0
         cx, cy = w / 2, h / 2
@@ -166,6 +176,7 @@ class SpacebotLinkApp(ShowBase):
         self._update_bg_scale()
 
     def _make_bg_card(self, initial_aspect: float) -> None:
+        """Create a textured card behind the scene to display the camera feed."""
         if self.camera is None:
             return
         cm = CardMaker("background")
@@ -188,6 +199,7 @@ class SpacebotLinkApp(ShowBase):
         self._update_bg_scale()
 
     def _update_bg_scale(self) -> None:
+        """Scale the background card to fill the current camera frustum."""
         if not hasattr(self, "bg_card") or self.camLens is None:
             return
         d = abs(self.bg_card.getY())
@@ -200,13 +212,25 @@ class SpacebotLinkApp(ShowBase):
             s = half_h / self._bg_aspect
             self.bg_card.setScale(s)
 
+    def _resolve_asset_path(self, gltf_path: str) -> Optional[Path]:
+        """Return an existing path for a GLTF asset (local or ../assets)."""
+        path = Path(gltf_path)
+        if path.exists():
+            return path
+        fallback = (
+            Path(__file__).resolve().parent / ".." / "assets" / Path(gltf_path).name
+        ).resolve()
+        return fallback if fallback.exists() else None
+
     # ---- tasks ----
-    def _bus_task(self, task: "PythonTask"):
+    def _bus_task(self, task: "PythonTask") -> int:
+        """Pump sensor and image sockets so they stay current."""
         self.bus_sensors.poll(100)
         self.bus_images.poll(100)
         return Task.cont
 
-    def _goal_publish_task(self, task: "PythonTask"):
+    def _goal_publish_task(self, task: "PythonTask") -> int:
+        """Publish nav goal if avatar pose changed since the last send."""
         if not self._goal_publishing_enabled:
             return Task.cont
 
@@ -227,7 +251,8 @@ class SpacebotLinkApp(ShowBase):
 
         return Task.cont
 
-    def _camera_task(self, task: "PythonTask"):
+    def _camera_task(self, task: "PythonTask") -> int:
+        """Update the background texture with the latest camera frame."""
         rgb = self.bus_images.get_image_rgb(TOPIC_IMAGE)
         if rgb is not None:
             h, w = rgb.shape[:2]
@@ -236,7 +261,8 @@ class SpacebotLinkApp(ShowBase):
             self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")
         return Task.cont
 
-    def _pose_task(self, task: "PythonTask"):
+    def _pose_task(self, task: "PythonTask") -> int:
+        """Track robot pose and drive the camera to follow it."""
         payload = self.bus_sensors.get(TOPIC_POSE)
         if isinstance(payload, dict):
             ros_pose = self._extract_ros_pose(payload)
@@ -253,7 +279,8 @@ class SpacebotLinkApp(ShowBase):
                     self._last_cam_pos_hpr = (pos, hpr)
         return Task.cont
 
-    def _pool_keyboard(self, task: "PythonTask"):
+    def _pool_keyboard(self, task: "PythonTask") -> int:
+        """Poll keyboard to either move the avatar or send cmd_vel."""
         dt = ClockObject.getGlobalClock().getDt()
         mw = self.mouseWatcherNode
         if not mw:
@@ -327,7 +354,8 @@ class SpacebotLinkApp(ShowBase):
             self._publish_cmd_vel(lin_x, lin_y, lin_z, ang_x, ang_y, ang_z)
         return Task.cont
 
-    def _metrics_task(self, task: "PythonTask"):
+    def _metrics_task(self, task: "PythonTask") -> int:
+        """Accumulate FPS samples for display."""
         dt = ClockObject.getGlobalClock().getDt()
         if dt > 1e-6:
             self._fps_samples.append(1.0 / dt)
@@ -338,7 +366,8 @@ class SpacebotLinkApp(ShowBase):
         )
         return Task.cont
 
-    def _cleanup(self):
+    def _cleanup(self) -> None:
+        """Close all bus publishers/subscribers on exit."""
         try:
             self.bus_sensors.close()
         except Exception:
@@ -351,6 +380,7 @@ class SpacebotLinkApp(ShowBase):
             self.cmd_pub.close()
         except Exception:
             pass
+        self._clear_path_markers()
 
     # ---- control helpers ----
     def _set_move_mode(self, move_robot: bool) -> None:
@@ -364,6 +394,7 @@ class SpacebotLinkApp(ShowBase):
             self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def _toggle_move_mode(self) -> None:
+        """Toggle between avatar and robot control modes."""
         self._set_move_mode(not self._move_robot)
 
     def _publish_cmd_vel(
@@ -375,6 +406,7 @@ class SpacebotLinkApp(ShowBase):
         ang_y: float,
         ang_z: float,
     ) -> None:
+        """Publish a geometry_msgs/Twist-style command."""
         data = {
             "linear": {"x": float(lin_x), "y": float(lin_y), "z": float(lin_z)},
             "angular": {"x": float(ang_x), "y": float(ang_y), "z": float(ang_z)},
@@ -387,6 +419,7 @@ class SpacebotLinkApp(ShowBase):
     def _extract_ros_pose(
         self, payload: dict
     ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float], dict]]:
+        """Normalize incoming ROS pose payload into position, rpy, and orientation."""
         pose = payload.get("pose") if isinstance(payload, dict) else None
         if isinstance(pose, dict):
             position = pose.get("position")
@@ -428,6 +461,7 @@ class SpacebotLinkApp(ShowBase):
     def _quat_to_rpy_deg(
         self, qx: float, qy: float, qz: float, qw: float
     ) -> Optional[Tuple[float, float, float]]:
+        """Convert quaternion components into roll, pitch, yaw in degrees."""
         try:
             qx = float(qx)
             qy = float(qy)
@@ -459,6 +493,7 @@ class SpacebotLinkApp(ShowBase):
         pos_eps: float = 1e-4,
         hpr_eps: float = 1e-3,
     ) -> bool:
+        """Check if pose moved enough to warrant publishing a new goal."""
         if self._last_goal_pose is None:
             return True
         (x1, y1, z1), (h1, p1, r1) = self._last_goal_pose
@@ -482,6 +517,7 @@ class SpacebotLinkApp(ShowBase):
     def get_camera_pose(
         self,
     ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        """Return the camera pose in world coordinates, if available."""
         if self.camera is None:
             return None
         pos_v = self.camera.getPos(self.render)
@@ -493,10 +529,87 @@ class SpacebotLinkApp(ShowBase):
     def get_avatar_pose(
         self,
     ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """Return the avatar pose in world coordinates."""
         return self.avatar.get_pose()
+
+    # ---- path visualizer ----
+    def _load_path_proto(self) -> Optional[NodePath]:
+        """Load the reusable prototype model for path markers."""
+        if self._path_proto_failed:
+            return None
+        resolved = self._resolve_asset_path("../assets/path_ghost.glb")
+        if resolved is None:
+            self._path_proto_failed = True
+            return None
+        proto = self.loader.loadModel(str(resolved))
+        if proto is None or proto.isEmpty():
+            self._path_proto_failed = True
+            return None
+        return proto
+
+    def _clear_path_markers(self) -> None:
+        """Remove any existing path marker nodes from the scene graph."""
+        for np_ in self._path_markers:
+            try:
+                np_.removeNode()
+            except Exception:
+                pass
+        self._path_markers.clear()
+
+    def _parse_ros_path(
+        self, payload: Dict
+    ) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        """Convert a ROS Path-like dict into Panda3D (pos, hpr) tuples."""
+        poses = payload.get("poses") if isinstance(payload, dict) else None
+        if not isinstance(poses, list):
+            return []
+
+        parsed: List[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = []
+        for entry in poses:
+            pose_dict = entry.get("pose") if isinstance(entry, dict) else None
+            pose_obj = pose_dict if isinstance(pose_dict, dict) else entry
+            if not isinstance(pose_obj, dict):
+                continue
+            pos_hpr = ros_pose_to_panda_pos_hpr(pose_obj)
+            if pos_hpr is not None:
+                parsed.append(pos_hpr)
+        return parsed
+
+    def _path_task(self, task: "PythonTask") -> int:
+        """Lay down path ghost markers for every other pose in the latest path."""
+        payload = self.bus_sensors.get(TOPIC_PATH)
+        if not isinstance(payload, dict):
+            return Task.cont
+        if payload == self._last_path_data:
+            return Task.cont
+        self._last_path_data = payload
+
+        poses = self._parse_ros_path(payload)
+        self._clear_path_markers()
+        if not poses:
+            return Task.cont
+
+        if self._path_proto is None:
+            self._path_proto = self._load_path_proto()
+        proto = self._path_proto
+        if proto is None:
+            return Task.cont
+
+        for idx, (pos, hpr) in enumerate(poses):
+            if idx % 4 != 0 or idx == 0:
+                continue
+            ghost = proto.copyTo(self.render)
+            ghost.setPos(self.render, pos[0], pos[1], pos[2])
+            ghost.setHpr(self.render, hpr[0], hpr[1], hpr[2])
+            # Draw markers behind the avatar overlays.
+            ghost.setBin("fixed", 5)
+            ghost.setDepthWrite(False)
+            self._path_markers.append(ghost)
+        return Task.cont
 
     # ---- debug UI ----
     def _init_imgui(self) -> None:
+        """Initialize the ImGui overlay if available."""
         try:
             p3dimgui.init()
             style = imgui.get_style()
@@ -512,6 +625,7 @@ class SpacebotLinkApp(ShowBase):
         self.accept("imgui-new-frame", self._draw_debug_ui)
 
     def _draw_debug_ui(self) -> None:
+        """Render an on-screen debug window with state and controls."""
         if not self._imgui_ready:
             return
 
@@ -542,6 +656,8 @@ class SpacebotLinkApp(ShowBase):
                 imgui.text(
                     f"  orientation (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}"
                 )
+        else:
+            imgui.text("  waiting for avatar pose")
 
         imgui.spacing()
         imgui.text("Robot pose (/space_cobot/pose)")
@@ -555,6 +671,14 @@ class SpacebotLinkApp(ShowBase):
                 )
         else:
             imgui.text("  waiting for /space_cobot/pose")
+
+        if av_ros is not None and self._last_ros_pose is not None:
+            dx = pos_ros["x"] - self._last_ros_pose[0][0]
+            dy = pos_ros["y"] - self._last_ros_pose[0][1]
+            dz = pos_ros["z"] - self._last_ros_pose[0][2]
+            dist = sqrt(dx * dx + dy * dy + dz * dz)
+            imgui.spacing()
+            imgui.text(f"Avatar-robot position error: {dist:.3f} m")
 
         imgui.separator()
         changed_move, move_robot = imgui.checkbox(
@@ -572,7 +696,8 @@ class SpacebotLinkApp(ShowBase):
         imgui.end()
 
 
-def main(argv=None) -> None:
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Create and run the SpacebotLink application."""
     app = SpacebotLinkApp()
     app.run()
 
