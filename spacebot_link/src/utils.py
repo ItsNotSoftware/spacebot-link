@@ -3,7 +3,7 @@
 The module currently folds together intrinsics handling (mapping OpenCV
 camera calibration parameters onto Panda3D lenses) and a small ROS-to-Panda3D
 orientation converter used for IMU data. Keeping them in one place avoids the
-previous duplication between ``intrinsics.py`` and ``imu_utils.py`` and makes
+previous duplication between intrinsics.py and imu_utils.py and makes
 it clear where future bridge helpers should live.
 """
 
@@ -32,10 +32,10 @@ def apply_opencv_intrinsics_to_lens(
     cx: float,
     cy: float,
 ) -> None:
-    """Project OpenCV intrinsics onto a Panda3D ``PerspectiveLens``.
+    """Project OpenCV intrinsics onto a Panda3D PerspectiveLens.
 
-    ``fx``/``fy`` are focal lengths in pixel units, ``cx``/``cy`` are the
-    principal point offsets, and ``width_px``/``height_px`` describe the image
+    fx/fy are focal lengths in pixel units, cx/cy are the
+    principal point offsets, and width_px/height_px describe the image
     resolution those values were calibrated for. The helper computes the
     equivalent horizontal/vertical field of view and film offset so the viewer
     camera mirrors the ROS camera model.
@@ -66,21 +66,17 @@ def _quat_multiply(
     )
 
 
-def _quat_conjugate(q: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+def _quat_conjugate(
+    q: Tuple[float, float, float, float],
+) -> Tuple[float, float, float, float]:
     w, x, y, z = q
     return (w, -x, -y, -z)
 
 
 def ros_orientation_to_panda_hpr(
-    orientation: Dict[str, Any]
+    orientation: Dict[str, Any],
 ) -> Optional[Tuple[float, float, float]]:
-    """Convert a ROS ``geometry_msgs/Quaternion`` into Panda3D ``(H, P, R)``.
-
-    ROS uses an ENU frame (X forward, Y left, Z up) whereas Panda3D extracts
-    heading/pitch/roll assuming a different camera basis. Multiplying the ROS
-    quaternion by a fixed 90° rotation around Z bridges the two conventions so
-    ``Quat.getHpr`` returns intuitive values for the viewer avatar.
-    """
+    """Convert a ROS geometry_msgs/Quaternion into Panda3D (H, P, R)"""
 
     try:
         qx = float(orientation.get("x"))
@@ -102,7 +98,7 @@ def ros_orientation_to_panda_hpr(
 
 
 def ros_position_to_panda_pos(
-    position: Dict[str, Any]
+    position: Dict[str, Any],
 ) -> Optional[Tuple[float, float, float]]:
     """Convert ROS ENU position to Panda3D XYZ.
 
@@ -119,7 +115,7 @@ def ros_position_to_panda_pos(
 
 
 def ros_pose_to_panda_pos_hpr(
-    payload: Dict[str, Any]
+    payload: Dict[str, Any],
 ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
     """Extract a ROS Pose/PoseStamped-like dict into Panda3D (pos, hpr).
 
@@ -147,7 +143,7 @@ def ros_pose_to_panda_pos_hpr(
 
 
 def panda_pose_to_ros(
-    pos_hpr: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    pos_hpr: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
 ) -> Optional[Dict[str, Dict[str, float]]]:
     """Convert Panda3D (pos, hpr) to a ROS-style pose dict (position + quaternion).
 
