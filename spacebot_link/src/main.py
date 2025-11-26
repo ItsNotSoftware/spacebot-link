@@ -156,6 +156,8 @@ class SpacebotLinkApp(ShowBase):
         ] = None
         self._last_robot_hpr: Optional[Tuple[float, float, float]] = None
         self._pending_abort_goal: bool = False
+        self._abort_restore_mode: Optional[str] = None
+        self._abort_restore_task: Optional[Task] = None
         self._robot_stopped_last: bool = False
         self._nav_publishing_enabled: bool = True
         self._follow_path_points: List[
@@ -357,10 +359,12 @@ class SpacebotLinkApp(ShowBase):
             pass
 
     def _publish_hold_path(
-        self, pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        self,
+        pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+        ros_pose_override: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
         """Publish a tiny 2-point path at the current pose to keep the controller stable."""
-        ros_pose = panda_pose_to_ros(pose)
+        ros_pose = ros_pose_override or panda_pose_to_ros(pose)
         if ros_pose is None:
             return
         poses = [{"pose": ros_pose}, {"pose": ros_pose}]
@@ -738,7 +742,7 @@ class SpacebotLinkApp(ShowBase):
         if proto is None:
             return
         for idx, (pos, hpr) in enumerate(poses):
-            if idx % 3 != 0 or idx == 0:
+            if idx % 4 != 0 or idx == 0:
                 continue
             ghost = proto.copyTo(self.render)
             ghost.setPos(self.render, pos[0], pos[1], pos[2])
@@ -782,7 +786,7 @@ class SpacebotLinkApp(ShowBase):
         scr_h = io.display_size.y or 1080.0
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
-        imgui.set_next_window_size((720, 480), imgui.Cond_.once)
+        imgui.set_next_window_size((860, 520), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
@@ -819,19 +823,15 @@ class SpacebotLinkApp(ShowBase):
         imgui.begin_child("Nav", (0, 140), True)
         if self.ui.mode == "Goal Mode":
             imgui.text("Goal")
-            if self._last_goal_pose is not None:
-                ros_goal = self._panda_pose_to_ros_tuple(self._last_goal_pose)
-                if ros_goal is not None:
-                    (gx, gy, gz), (gh, gp, gr) = ros_goal
-                    imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                    imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
-                else:
-                    (gx, gy, gz), (gh, gp, gr) = self._last_goal_pose
-                    imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                    imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+            ros_goal = self._panda_pose_to_ros_tuple(self._last_goal_pose)
+            if ros_goal is not None:
+                (gx, gy, gz), (gh, gp, gr) = ros_goal
+                imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
             else:
-                imgui.text("  none")
-            imgui.text(f"Planner path poses: {goal_path_count}")
+                (gx, gy, gz), (gh, gp, gr) = self._last_goal_pose
+                imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
         else:
             imgui.text("Follow path")
             imgui.text(f"  buffered poses: {follow_count}")
@@ -979,10 +979,14 @@ class SpacebotLinkApp(ShowBase):
         ros_pose = panda_pose_to_ros(pose)
         if ros_pose is None:
             return
+        self._publish_ros_goal(ros_pose)
+        self._last_goal_pose = pose
+
+    def _publish_ros_goal(self, ros_pose: Dict[str, Dict[str, float]]) -> None:
+        """Publish a goal when already in ROS coordinates."""
         msg = {"header": {"frame_id": "map"}, "pose": ros_pose}
         try:
             self.cmd_pub.publish(TOPIC_GOAL, msg)
-            self._last_goal_pose = pose
         except Exception:
             pass
 
@@ -999,6 +1003,15 @@ class SpacebotLinkApp(ShowBase):
 
     def _abort_to_robot_pose(self) -> None:
         """Stop the robot and align avatar to the freshest robot pose."""
+        if self._abort_restore_task is not None:
+            self.taskMgr.remove(self._abort_restore_task)
+            self._abort_restore_task = None
+        # Temporarily switch to follow mode to reuse the hold-path abort flow.
+        if self.ui.mode != "Follow Mode":
+            self._abort_restore_mode = self.ui.mode
+            self._activate_follow_mode()
+        else:
+            self._abort_restore_mode = None
         # Immediately command zero twist to halt motion.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         # Mark for goal publish on the next pose sample (or now if available).
@@ -1012,13 +1025,45 @@ class SpacebotLinkApp(ShowBase):
         pose = self._set_avatar_to_robot_pose()
         if pose is None:
             return
-        self._publish_goal_for_pose(pose)
+        # Prefer publishing using the last ROS pose to avoid frame drift.
+        ros_pose = None
+        if self._last_ros_pose is not None and self._last_ros_orientation is not None:
+            pos = self._last_ros_pose[0]
+            ros_pose = {
+                "position": {"x": pos[0], "y": pos[1], "z": pos[2]},
+                "orientation": {
+                    "x": float(self._last_ros_orientation.get("x", 0.0)),
+                    "y": float(self._last_ros_orientation.get("y", 0.0)),
+                    "z": float(self._last_ros_orientation.get("z", 0.0)),
+                    "w": float(self._last_ros_orientation.get("w", 1.0)),
+                },
+            }
+            self._publish_ros_goal(ros_pose)
+        else:
+            self._publish_goal_for_pose(pose)
+
         if self.ui.mode == "Follow Mode":
             self._follow_path_points = []
-        self._publish_hold_path(pose)
+        self._publish_hold_path(pose, ros_pose_override=ros_pose)
         # Ensure stop command accompanies the goal.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._pending_abort_goal = False
+        if self._abort_restore_mode is not None:
+            self._abort_restore_task = self.taskMgr.doMethodLater(
+                0.5, self._restore_abort_mode, "AbortRestoreMode"
+            )
+
+    def _restore_abort_mode(self, task: "PythonTask") -> int:
+        """Return to the original UI mode after an abort delay."""
+        if self._abort_restore_mode is not None:
+            restored_mode = self._abort_restore_mode
+            self.ui.set_mode(restored_mode)
+            if restored_mode == "Goal Mode":
+                # Seed last goal pose to avoid an immediate publish until movement.
+                self._last_goal_pose = self.avatar.get_pose()
+        self._abort_restore_mode = None
+        self._abort_restore_task = None
+        return Task.done
 
     def _maybe_sync_avatar_on_stop(self) -> None:
         """Teleport avatar to robot pose when incoming cmd_vel is zero."""
