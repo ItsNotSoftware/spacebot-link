@@ -10,6 +10,13 @@ from panda3d.core import (
 from direct.showbase.Loader import Loader
 from panda3d.core import NodePath
 
+# Avatar is modeled around the robot body center, but our world origin tracks
+# the camera optical center. These offsets shift the model so that placing the
+# avatar at (0, 0, 0) aligns the camera center instead of the mesh centroid.
+CAMERA_FORWARD_OFFSET_M = 0.36
+CAMERA_UP_OFFSET_M = 0.13
+AVATAR_CAMERA_OFFSET = (0.0, -CAMERA_FORWARD_OFFSET_M, -CAMERA_UP_OFFSET_M)
+
 
 class Avatar:
     """Two-pass transparent avatar rendering."""
@@ -32,7 +39,8 @@ class Avatar:
             )
 
         base_np.setScale(scale)
-        base_np.setPos(Point3(*pos))
+        offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
+        base_np.setPos(Point3(pos[0] + offset_x, pos[1] + offset_y, pos[2] + offset_z))
         base_np.setHpr(*hpr)
         self._init_hpr: Tuple[float, float, float] = (
             float(hpr[0]),

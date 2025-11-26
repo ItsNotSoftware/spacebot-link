@@ -35,35 +35,26 @@ from utils import (
 from avatar import Avatar
 from ui import UI
 
-# ---- config before ShowBase ----
-loadPrcFileData("", "window-title SpaceBotLink")
-loadPrcFileData("", "framebuffer-srgb true")
-loadPrcFileData("", "transparency-sort off")
-
-try:
-    import importlib
-
-    _gltf_mod = importlib.import_module("panda3d_gltf")
-    getattr(_gltf_mod, "GLTFLoader").register_loader()
-except Exception:
-    pass
+WINDOW_TITLE = "SpaceBotLink"
+FRAMEBUFFER_SRGB_CFG = "framebuffer-srgb true"
+TRANSPARENCY_SORT_CFG = "transparency-sort off"
 
 # Key mappings
-forward_button = KeyboardButton.ascii_key("w")
-backward_button = KeyboardButton.ascii_key("s")
-left_button = KeyboardButton.ascii_key("a")
-right_button = KeyboardButton.ascii_key("d")
-up_button = KeyboardButton.ascii_key("e")
-down_button = KeyboardButton.ascii_key("q")
-up_button_alt = KeyboardButton.space()
-down_button_alt = KeyboardButton.lshift()
-pitch_up_button = KeyboardButton.ascii_key("i")
-pitch_down_button = KeyboardButton.ascii_key("k")
-yaw_left_button = KeyboardButton.ascii_key("u")
-yaw_right_button = KeyboardButton.ascii_key("o")
-roll_left_button = KeyboardButton.ascii_key("j")
-roll_right_button = KeyboardButton.ascii_key("l")
-reset_orient_button = KeyboardButton.ascii_key("r")
+FORWARD_BUTTON = KeyboardButton.ascii_key("w")
+BACKWARD_BUTTON = KeyboardButton.ascii_key("s")
+LEFT_BUTTON = KeyboardButton.ascii_key("a")
+RIGHT_BUTTON = KeyboardButton.ascii_key("d")
+UP_BUTTON = KeyboardButton.ascii_key("e")
+DOWN_BUTTON = KeyboardButton.ascii_key("q")
+UP_BUTTON_ALT = KeyboardButton.space()
+DOWN_BUTTON_ALT = KeyboardButton.lshift()
+PITCH_UP_BUTTON = KeyboardButton.ascii_key("i")
+PITCH_DOWN_BUTTON = KeyboardButton.ascii_key("k")
+YAW_LEFT_BUTTON = KeyboardButton.ascii_key("u")
+YAW_RIGHT_BUTTON = KeyboardButton.ascii_key("o")
+ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("j")
+ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("l")
+RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
 
 # Topics used by your ROS→ZMQ bridge
 TOPIC_IMAGE = "/main_camera/image"
@@ -76,6 +67,19 @@ TOPIC_PATH = "/nav6d/planner/path"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
+
+# ---- config before ShowBase ----
+loadPrcFileData("", f"window-title {WINDOW_TITLE}")
+loadPrcFileData("", FRAMEBUFFER_SRGB_CFG)
+loadPrcFileData("", TRANSPARENCY_SORT_CFG)
+
+try:
+    import importlib
+
+    _gltf_mod = importlib.import_module("panda3d_gltf")
+    getattr(_gltf_mod, "GLTFLoader").register_loader()
+except Exception:
+    pass
 
 
 class SpacebotLinkApp(ShowBase):
@@ -288,67 +292,67 @@ class SpacebotLinkApp(ShowBase):
 
         if not self._move_robot:
             move = Vec3(0, 0, 0)
-            if mw.is_button_down(forward_button):
+            if mw.is_button_down(FORWARD_BUTTON):
                 move.y += MOVE_SPEED * dt
-            if mw.is_button_down(backward_button):
+            if mw.is_button_down(BACKWARD_BUTTON):
                 move.y -= MOVE_SPEED * dt
-            if mw.is_button_down(left_button):
+            if mw.is_button_down(LEFT_BUTTON):
                 move.x -= MOVE_SPEED * dt
-            if mw.is_button_down(right_button):
+            if mw.is_button_down(RIGHT_BUTTON):
                 move.x += MOVE_SPEED * dt
-            if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
+            if mw.is_button_down(UP_BUTTON) or mw.is_button_down(UP_BUTTON_ALT):
                 move.z += MOVE_SPEED * dt
-            if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
+            if mw.is_button_down(DOWN_BUTTON) or mw.is_button_down(DOWN_BUTTON_ALT):
                 move.z -= MOVE_SPEED * dt
             if move.length_squared() > 0:
                 self.avatar.move_world(move.x, move.y, move.z)
 
             dh = dp = dr = 0.0
             step = ROTATE_SPEED * 60.0 * dt
-            if mw.is_button_down(yaw_left_button):
+            if mw.is_button_down(YAW_LEFT_BUTTON):
                 dh += step
-            if mw.is_button_down(yaw_right_button):
+            if mw.is_button_down(YAW_RIGHT_BUTTON):
                 dh -= step
-            if mw.is_button_down(pitch_up_button):
+            if mw.is_button_down(PITCH_UP_BUTTON):
                 dp += step
-            if mw.is_button_down(pitch_down_button):
+            if mw.is_button_down(PITCH_DOWN_BUTTON):
                 dp -= step
-            if mw.is_button_down(roll_left_button):
+            if mw.is_button_down(ROLL_LEFT_BUTTON):
                 dr += step
-            if mw.is_button_down(roll_right_button):
+            if mw.is_button_down(ROLL_RIGHT_BUTTON):
                 dr -= step
             if dh or dp or dr:
                 self.avatar.add_hpr(dh, dp, dr)
-            if mw.is_button_down(reset_orient_button):
+            if mw.is_button_down(RESET_ORIENT_BUTTON):
                 self.avatar.reset_hpr()
         else:
             lin_x = lin_y = lin_z = 0.0
             ang_x = ang_y = ang_z = 0.0
 
-            if mw.is_button_down(forward_button):
+            if mw.is_button_down(FORWARD_BUTTON):
                 lin_x = +MOVE_SPEED
-            elif mw.is_button_down(backward_button):
+            elif mw.is_button_down(BACKWARD_BUTTON):
                 lin_x = -MOVE_SPEED
-            if mw.is_button_down(left_button):
+            if mw.is_button_down(LEFT_BUTTON):
                 lin_y = +MOVE_SPEED
-            elif mw.is_button_down(right_button):
+            elif mw.is_button_down(RIGHT_BUTTON):
                 lin_y = -MOVE_SPEED
-            if mw.is_button_down(up_button) or mw.is_button_down(up_button_alt):
+            if mw.is_button_down(UP_BUTTON) or mw.is_button_down(UP_BUTTON_ALT):
                 lin_z = +MOVE_SPEED
-            if mw.is_button_down(down_button) or mw.is_button_down(down_button_alt):
+            if mw.is_button_down(DOWN_BUTTON) or mw.is_button_down(DOWN_BUTTON_ALT):
                 lin_z = -MOVE_SPEED
 
-            if mw.is_button_down(roll_left_button):
+            if mw.is_button_down(ROLL_LEFT_BUTTON):
                 ang_x = +ROTATE_SPEED
-            elif mw.is_button_down(roll_right_button):
+            elif mw.is_button_down(ROLL_RIGHT_BUTTON):
                 ang_x = -ROTATE_SPEED
-            if mw.is_button_down(pitch_up_button):
+            if mw.is_button_down(PITCH_UP_BUTTON):
                 ang_y = +ROTATE_SPEED
-            elif mw.is_button_down(pitch_down_button):
+            elif mw.is_button_down(PITCH_DOWN_BUTTON):
                 ang_y = -ROTATE_SPEED
-            if mw.is_button_down(yaw_left_button):
+            if mw.is_button_down(YAW_LEFT_BUTTON):
                 ang_z = +ROTATE_SPEED
-            elif mw.is_button_down(yaw_right_button):
+            elif mw.is_button_down(YAW_RIGHT_BUTTON):
                 ang_z = -ROTATE_SPEED
 
             self._publish_cmd_vel(lin_x, lin_y, lin_z, ang_x, ang_y, ang_z)
