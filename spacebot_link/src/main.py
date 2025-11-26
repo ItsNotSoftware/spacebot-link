@@ -370,6 +370,20 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             pass
 
+    def _panda_pose_to_ros_tuple(
+        self, pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        """Convert panda (pos,hpr) tuple to ROS-frame (pos,rpy deg)."""
+        ros_pose = panda_pose_to_ros(pose)
+        if ros_pose is None:
+            return None
+        pos = ros_pose["position"]
+        ori = ros_pose["orientation"]
+        rpy = self._quat_to_rpy_deg(ori["x"], ori["y"], ori["z"], ori["w"])
+        if rpy is None:
+            return None
+        return (pos["x"], pos["y"], pos["z"]), rpy
+
     def _pose_task(self, task: "PythonTask") -> int:
         """Track robot pose and drive the camera to follow it."""
         payload = self.bus_sensors.get(TOPIC_POSE)
@@ -768,7 +782,7 @@ class SpacebotLinkApp(ShowBase):
         scr_h = io.display_size.y or 1080.0
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
-        imgui.set_next_window_size((700, 440), imgui.Cond_.once)
+        imgui.set_next_window_size((720, 480), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
@@ -776,53 +790,69 @@ class SpacebotLinkApp(ShowBase):
         imgui.text(f"FPS: {fps_text:.1f}")
 
         imgui.separator()
+        follow_count = len(self._follow_path_points)
+        goal_path_count = 0
+        if isinstance(self._last_path_data, dict):
+            goal_path_count = len(self._parse_ros_path(self._last_path_data))
+
         imgui.text(f"Mode: {self.ui.mode}")
-        changed_goal, publish_nav = imgui.checkbox(
+        imgui.same_line()
+        imgui.text_disabled("|")
+        imgui.same_line()
+        imgui.text(
+            f"Waypoints: {follow_count if self.ui.mode == 'Follow Mode' else goal_path_count}"
+        )
+
+        changed_nav, publish_nav = imgui.checkbox(
             "Publish goals/paths", self._nav_publishing_enabled
         )
-        if changed_goal:
-            self._nav_publishing_enabled = publish_nav
         imgui.same_line()
         changed_move, move_robot = imgui.checkbox(
             "Control robot (cmd_vel)", self._move_robot
         )
+        if changed_nav:
+            self._nav_publishing_enabled = publish_nav
         if changed_move:
             self._set_move_mode(move_robot)
 
+        imgui.spacing()
+        imgui.begin_child("Nav", (0, 140), True)
         if self.ui.mode == "Goal Mode":
+            imgui.text("Goal")
             if self._last_goal_pose is not None:
-                (gx, gy, gz), (gh, gp, gr) = self._last_goal_pose
-                imgui.text(f"Goal pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                imgui.text(f"Goal HPR (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+                ros_goal = self._panda_pose_to_ros_tuple(self._last_goal_pose)
+                if ros_goal is not None:
+                    (gx, gy, gz), (gh, gp, gr) = ros_goal
+                    imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                    imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+                else:
+                    (gx, gy, gz), (gh, gp, gr) = self._last_goal_pose
+                    imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                    imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
             else:
-                imgui.text("Goal: none")
+                imgui.text("  none")
+            imgui.text(f"Planner path poses: {goal_path_count}")
         else:
-            imgui.text(f"Follow path waypoints: {len(self._follow_path_points)}")
+            imgui.text("Follow path")
+            imgui.text(f"  buffered poses: {follow_count}")
+            if follow_count:
+                fx, fy, fz = self._follow_path_points[-1][0]
+                imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
+        imgui.end_child()
 
         imgui.spacing()
         imgui.columns(2, "pose_columns", False)
-        imgui.text("Avatar pose")
-        av_pos, av_hpr = self.avatar.get_pose()
-        av_ros = panda_pose_to_ros((av_pos, av_hpr))
-        if av_ros is not None:
-            pos_ros = av_ros["position"]
-            imgui.text(
-                f"  pos (m): {pos_ros['x']:.2f}, {pos_ros['y']:.2f}, {pos_ros['z']:.2f}"
-            )
-            rpy_ros = self._quat_to_rpy_deg(
-                av_ros["orientation"]["x"],
-                av_ros["orientation"]["y"],
-                av_ros["orientation"]["z"],
-                av_ros["orientation"]["w"],
-            )
-            if rpy_ros is not None:
-                roll, pitch, yaw = rpy_ros
-                imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
+        imgui.text("Avatar pose (ROS frame)")
+        av_ros_tuple = self._panda_pose_to_ros_tuple(self.avatar.get_pose())
+        if av_ros_tuple is not None:
+            (ax, ay, az), (ar, ap, ayaw) = av_ros_tuple
+            imgui.text(f"  pos (m): {ax:.2f}, {ay:.2f}, {az:.2f}")
+            imgui.text(f"  rpy (deg): {ar:.1f}, {ap:.1f}, {ayaw:.1f}")
         else:
             imgui.text("  waiting for pose")
 
         imgui.next_column()
-        imgui.text("Robot pose")
+        imgui.text("Robot pose (ROS frame)")
         if self._last_ros_pose is not None:
             (x, y, z), rpy = self._last_ros_pose
             imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
@@ -833,10 +863,12 @@ class SpacebotLinkApp(ShowBase):
             imgui.text("  waiting for /space_cobot/pose")
         imgui.columns(1)
 
-        if av_ros is not None and self._last_ros_pose is not None:
-            dx = pos_ros["x"] - self._last_ros_pose[0][0]
-            dy = pos_ros["y"] - self._last_ros_pose[0][1]
-            dz = pos_ros["z"] - self._last_ros_pose[0][2]
+        if av_ros_tuple is not None and self._last_ros_pose is not None:
+            (ax, ay, az), _ = av_ros_tuple
+            (rx, ry, rz), _ = self._last_ros_pose
+            dx = ax - rx
+            dy = ay - ry
+            dz = az - rz
             dist = sqrt(dx * dx + dy * dy + dz * dz)
             imgui.spacing()
             imgui.text(f"Avatar-robot position error: {dist:.3f} m")
@@ -929,6 +961,8 @@ class SpacebotLinkApp(ShowBase):
             return
         self.ui.set_mode("Goal Mode")
         self._follow_path_points.clear()
+        # Seed last goal pose so we don't immediately publish until the avatar moves.
+        self._last_goal_pose = self.avatar.get_pose()
 
     def _activate_follow_mode(self) -> None:
         """Switch to follow mode and seed the path with the current avatar pose."""
@@ -967,7 +1001,7 @@ class SpacebotLinkApp(ShowBase):
         """Stop the robot and align avatar to the freshest robot pose."""
         # Immediately command zero twist to halt motion.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        # Mark for goal/path publish on the next pose sample (or now if available).
+        # Mark for goal publish on the next pose sample (or now if available).
         self._pending_abort_goal = True
         self._maybe_finalize_abort()
 
@@ -979,10 +1013,8 @@ class SpacebotLinkApp(ShowBase):
         if pose is None:
             return
         self._publish_goal_for_pose(pose)
-        # Reset follow path to this pose so the planner sees a stable hold and local
-        # visualization updates without requiring manual nudge.
         if self.ui.mode == "Follow Mode":
-            self._follow_path_points = [pose]
+            self._follow_path_points = []
         self._publish_hold_path(pose)
         # Ensure stop command accompanies the goal.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
