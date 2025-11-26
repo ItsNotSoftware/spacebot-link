@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import deque
+import time
 from math import asin, atan2, degrees, pi, sin, sqrt
 from pathlib import Path
 from typing import Optional, Callable, Tuple, Sequence, Dict, List
@@ -139,18 +140,23 @@ class SpacebotLinkApp(ShowBase):
         self.avatar = Avatar(self.render, self.loader, str(model_path))
 
         # ui
-        self.ui: UI = UI(self)
+        self.ui: UI = UI(self, on_abort=self._abort_to_robot_pose)
         self._fps_samples = deque(maxlen=120)
         self._avg_fps: float = 0.0
         self._last_ros_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = None
         self._last_ros_orientation: Optional[Dict[str, float]] = None
+        self._last_robot_pose_panda: Optional[
+            Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = None
         self._last_goal_pub_time: float = 0.0
         self._last_goal_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = None
         self._last_robot_hpr: Optional[Tuple[float, float, float]] = None
+        self._pending_abort_goal: bool = False
+        self._robot_stopped_last: bool = False
         self._imgui_ready: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
@@ -281,9 +287,12 @@ class SpacebotLinkApp(ShowBase):
                 if parsed is not None:
                     pos, hpr = parsed
                     self._last_robot_hpr = hpr
+                    self._last_robot_pose_panda = (pos, hpr)
                     self.camera.setPos(self.render, pos[0], pos[1], pos[2])
                     self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
                     self._last_cam_pos_hpr = (pos, hpr)
+                    self._maybe_finalize_abort()
+            self._maybe_sync_avatar_on_stop()
         return Task.cont
 
     def _pool_keyboard(self, task: "PythonTask") -> int:
@@ -308,7 +317,11 @@ class SpacebotLinkApp(ShowBase):
             if mw.is_button_down(DOWN_BUTTON) or mw.is_button_down(DOWN_BUTTON_ALT):
                 move.z -= MOVE_SPEED * dt
             if move.length_squared() > 0:
-                self.avatar.move_world(move.x, move.y, move.z)
+                # Apply translation in the current camera (robot) frame.
+                frame = self.camera if self.camera is not None else self.render
+                q = frame.getQuat(self.render)
+                delta = q.xform(move)
+                self.avatar.move_world(delta.x, delta.y, delta.z)
 
             dh = dp = dr = 0.0
             step = ROTATE_SPEED * 60.0 * dt
@@ -608,7 +621,7 @@ class SpacebotLinkApp(ShowBase):
             return Task.cont
 
         for idx, (pos, hpr) in enumerate(poses):
-            if idx % 4 != 0 or idx == 0:
+            if idx % 3 != 0 or idx == 0:
                 continue
             ghost = proto.copyTo(self.render)
             ghost.setPos(self.render, pos[0], pos[1], pos[2])
@@ -628,6 +641,13 @@ class SpacebotLinkApp(ShowBase):
             style.font_size_base = 22.0  # request larger base font size
             style.font_scale_main = 1.25
             style.scale_all_sizes(1.25)
+            style.window_rounding = 8.0
+            style.child_rounding = 8.0
+            style.frame_rounding = 6.0
+            style.window_padding = (12, 12)
+            style.frame_padding = (10, 8)
+            style.item_spacing = (10, 8)
+            imgui.style_colors_dark()  # basic palette that works across bindings
         except Exception as exc:
             print(f"[imgui] Failed to initialize ImGui overlay: {exc}")
             self._imgui_ready = False
@@ -641,7 +661,13 @@ class SpacebotLinkApp(ShowBase):
         if not self._imgui_ready:
             return
 
-        imgui.set_next_window_size((520, 260), imgui.Cond_.once)
+        pad = 14.0
+        io = imgui.get_io()
+        scr_w = io.display_size.x or 1920.0
+        scr_h = io.display_size.y or 1080.0
+
+        imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
+        imgui.set_next_window_size((660, 400), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
@@ -706,6 +732,162 @@ class SpacebotLinkApp(ShowBase):
             self._goal_publishing_enabled = publish_goals
 
         imgui.end()
+
+        # Top-right control window
+        ctrl_w = 420.0
+        ctrl_h = 320.0
+        ctrl_x = max(pad, scr_w - ctrl_w - pad)
+        ctrl_y = pad
+        imgui.set_next_window_pos((ctrl_x, ctrl_y), imgui.Cond_.always)
+        imgui.set_next_window_size((ctrl_w, ctrl_h), imgui.Cond_.once)
+        imgui.begin(
+            "Controls",
+            flags=imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_resize,
+        )
+
+        avail = imgui.get_content_region_avail().x
+        half = (avail - imgui.get_style().item_spacing.x) * 0.5
+        btn_h = 56
+
+        def _button(label: str, size, base_col, hover_col, active_col) -> bool:
+            imgui.push_style_color(imgui.Col_.button, base_col)
+            imgui.push_style_color(imgui.Col_.button_hovered, hover_col)
+            imgui.push_style_color(imgui.Col_.button_active, active_col)
+            pressed = imgui.button(label, size)
+            imgui.pop_style_color(3)
+            return pressed
+
+        is_follow = self.ui.mode == "Follow Mode"
+
+        # Active mode gets a brighter tint instead of a trailing check mark
+        def _mode_colors(active: bool):
+            if active:
+                return (
+                    (0.25, 0.55, 0.92, 1.0),
+                    (0.30, 0.60, 0.98, 1.0),
+                    (0.22, 0.48, 0.80, 1.0),
+                )
+            return (
+                (0.24, 0.34, 0.48, 1.0),
+                (0.28, 0.40, 0.56, 1.0),
+                (0.22, 0.32, 0.44, 1.0),
+            )
+
+        f_base, f_hover, f_active = _mode_colors(is_follow)
+        g_base, g_hover, g_active = _mode_colors(not is_follow)
+
+        if _button("Follow", (half, btn_h), f_base, f_hover, f_active):
+            self.ui.set_mode("Follow Mode")
+        imgui.same_line()
+        if _button("Goal", (half, btn_h), g_base, g_hover, g_active):
+            self.ui.set_mode("Goal Mode")
+
+        imgui.spacing()
+        imgui.text_colored((0.82, 0.90, 1.00, 1.0), f"Active Mode: {self.ui.mode}")
+        imgui.separator()
+
+        btn_w = avail
+        if _button(
+            "Reset Orientation",
+            (btn_w, btn_h),
+            (0.26, 0.46, 0.68, 1.0),
+            (0.30, 0.52, 0.78, 1.0),
+            (0.24, 0.40, 0.60, 1.0),
+        ):
+            self._reset_avatar_orientation_to_robot()
+        if _button(
+            "Abort",
+            (btn_w, btn_h),
+            (0.70, 0.22, 0.22, 1.0),
+            (0.78, 0.28, 0.28, 1.0),
+            (0.60, 0.18, 0.18, 1.0),
+        ):
+            self._abort_to_robot_pose()
+
+        imgui.end()
+
+    def _reset_avatar_orientation_to_robot(self) -> None:
+        """Align avatar orientation to the latest robot heading."""
+        if self._last_robot_hpr is None:
+            return
+        h, p, r = self._last_robot_hpr
+        self.avatar.set_hpr(h, p, r)
+
+    def _publish_goal_for_pose(
+        self, pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ) -> None:
+        """Publish a single goal for the provided Panda3D pose."""
+        ros_pose = panda_pose_to_ros(pose)
+        if ros_pose is None:
+            return
+        msg = {"header": {"frame_id": "map"}, "pose": ros_pose}
+        try:
+            self.cmd_pub.publish(TOPIC_GOAL, msg)
+            self._last_goal_pose = pose
+        except Exception:
+            pass
+
+    def _set_avatar_to_robot_pose(self) -> Optional[
+        Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ]:
+        """Snap avatar to latest robot pose without publishing."""
+        if self._last_robot_pose_panda is None:
+            return None
+        pos, hpr = self._last_robot_pose_panda
+        self.avatar.set_pos(pos[0], pos[1], pos[2])
+        self.avatar.set_hpr(hpr[0], hpr[1], hpr[2])
+        return self.avatar.get_pose()
+
+    def _abort_to_robot_pose(self) -> None:
+        """Stop the robot and align avatar to the freshest robot pose."""
+        # Immediately command zero twist to halt motion.
+        self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        # Mark for goal publish on the next pose sample (or now if available).
+        self._pending_abort_goal = True
+        self._maybe_finalize_abort()
+
+    def _maybe_finalize_abort(self) -> None:
+        """If an abort is pending and pose is available, snap and publish goal."""
+        if not self._pending_abort_goal:
+            return
+        pose = self._set_avatar_to_robot_pose()
+        if pose is None:
+            return
+        self._publish_goal_for_pose(pose)
+        # Ensure stop command accompanies the goal.
+        self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        self._pending_abort_goal = False
+
+    def _maybe_sync_avatar_on_stop(self) -> None:
+        """Teleport avatar to robot pose when incoming cmd_vel is zero."""
+        payload = self.bus_sensors.get(TOPIC_CMD_VEL)
+        is_zero = self._is_zero_cmd_vel(payload)
+        if is_zero and not self._robot_stopped_last:
+            self._set_avatar_to_robot_pose()
+        self._robot_stopped_last = is_zero
+
+    def _is_zero_cmd_vel(self, payload: dict, eps: float = 1e-4) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        lin = payload.get("linear") if isinstance(payload, dict) else None
+        ang = payload.get("angular") if isinstance(payload, dict) else None
+        try:
+            lx = float(lin.get("x", 0.0))
+            ly = float(lin.get("y", 0.0))
+            lz = float(lin.get("z", 0.0))
+            ax = float(ang.get("x", 0.0))
+            ay = float(ang.get("y", 0.0))
+            az = float(ang.get("z", 0.0))
+        except Exception:
+            return False
+        return (
+            abs(lx) <= eps
+            and abs(ly) <= eps
+            and abs(lz) <= eps
+            and abs(ax) <= eps
+            and abs(ay) <= eps
+            and abs(az) <= eps
+        )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
