@@ -66,6 +66,7 @@ TOPIC_POSE = "/space_cobot/pose"
 TOPIC_CMD_VEL = "/space_cobot/cmd_vel"
 TOPIC_GOAL = "/nav6d/goal"
 TOPIC_PATH = "/nav6d/planner/path"
+TOPIC_CMD_PATH = "/nav6d/planner/path"
 
 MOVE_SPEED = 0.8
 ROTATE_SPEED = 1.5
@@ -117,7 +118,6 @@ class SpacebotLinkApp(ShowBase):
 
         # Toggle: move avatar (default) or robot (send cmd_vel)
         self._move_robot: bool = False
-        self._goal_publishing_enabled: bool = True
 
         # path ghosts
         self._path_markers: List[NodePath] = []
@@ -157,6 +157,14 @@ class SpacebotLinkApp(ShowBase):
         self._last_robot_hpr: Optional[Tuple[float, float, float]] = None
         self._pending_abort_goal: bool = False
         self._robot_stopped_last: bool = False
+        self._nav_publishing_enabled: bool = True
+        self._follow_path_points: List[
+            Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = []
+        self._follow_pos_eps: float = 0.02
+        self._follow_hpr_eps: float = 1.0
+        self._follow_reached_thresh: float = 0.2
+        self._follow_sample_period: float = 0.15
         self._imgui_ready: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
@@ -170,6 +178,9 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._metrics_task, "MetricsTask")
         self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
         self.taskMgr.add(self._path_task, "PathTask")
+        self.taskMgr.doMethodLater(
+            self._follow_sample_period, self._follow_mode_tick, "FollowModeTick"
+        )
 
         self._init_imgui()
 
@@ -243,7 +254,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _goal_publish_task(self, task: "PythonTask") -> int:
         """Publish nav goal if avatar pose changed since the last send."""
-        if not self._goal_publishing_enabled:
+        if self.ui.mode != "Goal Mode":
+            return Task.cont
+        if not self._nav_publishing_enabled:
             return Task.cont
 
         pose = self.avatar.get_pose()
@@ -263,6 +276,18 @@ class SpacebotLinkApp(ShowBase):
 
         return Task.cont
 
+    def _follow_mode_tick(self, task: "PythonTask") -> int:
+        """Sample avatar pose and publish a path while in Follow Mode."""
+        if self.ui.mode == "Follow Mode":
+            self._prune_follow_path()
+            pose = self.avatar.get_pose()
+            if self._should_append_follow_pose(pose):
+                self._follow_path_points.append(pose)
+            if self._nav_publishing_enabled:
+                self._publish_follow_path()
+        task.delayTime = self._follow_sample_period
+        return Task.again
+
     def _camera_task(self, task: "PythonTask") -> int:
         """Update the background texture with the latest camera frame."""
         rgb = self.bus_images.get_image_rgb(TOPIC_IMAGE)
@@ -272,6 +297,78 @@ class SpacebotLinkApp(ShowBase):
                 self.bg_tex.setup2dTexture(w, h, Texture.T_unsigned_byte, Texture.F_rgb)
             self.bg_tex.setRamImageAs(rgb.tobytes(), "RGB")
         return Task.cont
+
+    def _should_append_follow_pose(
+        self,
+        pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+    ) -> bool:
+        """Return True if pose is far enough from last sample to append."""
+        if not self._follow_path_points:
+            return True
+        (x1, y1, z1), (h1, p1, r1) = self._follow_path_points[-1]
+        (x2, y2, z2), (h2, p2, r2) = pose
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        dz = abs(z2 - z1)
+        dh = abs(h2 - h1)
+        dp = abs(p2 - p1)
+        dr = abs(r2 - r1)
+        return (
+            dx > self._follow_pos_eps
+            or dy > self._follow_pos_eps
+            or dz > self._follow_pos_eps
+            or dh > self._follow_hpr_eps
+            or dp > self._follow_hpr_eps
+            or dr > self._follow_hpr_eps
+        )
+
+    def _prune_follow_path(self) -> None:
+        """Drop leading waypoints once the robot reaches them."""
+        if self._last_robot_pose_panda is None or not self._follow_path_points:
+            return
+        (rx, ry, rz), _ = self._last_robot_pose_panda
+        while len(self._follow_path_points) > 1:
+            (px, py, pz), _ = self._follow_path_points[0]
+            dist = sqrt((px - rx) ** 2 + (py - ry) ** 2 + (pz - rz) ** 2)
+            if dist <= self._follow_reached_thresh:
+                self._follow_path_points.pop(0)
+            else:
+                break
+
+    def _publish_follow_path(self) -> None:
+        """Publish the current follow-mode path as a nav_msgs/Path-like dict."""
+        if not self._follow_path_points:
+            return
+        points = list(self._follow_path_points)
+        if len(points) == 1 and self._last_robot_pose_panda is not None:
+            points = [self._last_robot_pose_panda] + points
+        poses = []
+        for pos_hpr in points:
+            ros_pose = panda_pose_to_ros(pos_hpr)
+            if ros_pose is None:
+                continue
+            poses.append({"pose": ros_pose})
+        if not poses:
+            return
+        msg = {"header": {"frame_id": "map"}, "poses": poses}
+        try:
+            self.cmd_pub.publish(TOPIC_CMD_PATH, msg)
+        except Exception:
+            pass
+
+    def _publish_hold_path(
+        self, pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ) -> None:
+        """Publish a tiny 2-point path at the current pose to keep the controller stable."""
+        ros_pose = panda_pose_to_ros(pose)
+        if ros_pose is None:
+            return
+        poses = [{"pose": ros_pose}, {"pose": ros_pose}]
+        msg = {"header": {"frame_id": "map"}, "poses": poses}
+        try:
+            self.cmd_pub.publish(TOPIC_CMD_PATH, msg)
+        except Exception:
+            pass
 
     def _pose_task(self, task: "PythonTask") -> int:
         """Track robot pose and drive the camera to follow it."""
@@ -602,35 +699,39 @@ class SpacebotLinkApp(ShowBase):
 
     def _path_task(self, task: "PythonTask") -> int:
         """Lay down path ghost markers for every other pose in the latest path."""
-        payload = self.bus_sensors.get(TOPIC_PATH)
-        if not isinstance(payload, dict):
+        if self.ui.mode == "Follow Mode":
+            self._render_path_markers(self._follow_path_points)
             return Task.cont
-        if payload == self._last_path_data:
-            return Task.cont
-        self._last_path_data = payload
 
-        poses = self._parse_ros_path(payload)
+        payload = self.bus_sensors.get(TOPIC_PATH)
+        if isinstance(payload, dict) and payload != self._last_path_data:
+            self._last_path_data = payload
+            poses = self._parse_ros_path(payload)
+            self._render_path_markers(poses)
+        return Task.cont
+
+    def _render_path_markers(
+        self,
+        poses: List[Tuple[Tuple[float, float, float], Tuple[float, float, float]]],
+    ) -> None:
+        """Render path markers from a list of Panda3D (pos, hpr) tuples."""
         self._clear_path_markers()
         if not poses:
-            return Task.cont
-
+            return
         if self._path_proto is None:
             self._path_proto = self._load_path_proto()
         proto = self._path_proto
         if proto is None:
-            return Task.cont
-
+            return
         for idx, (pos, hpr) in enumerate(poses):
             if idx % 3 != 0 or idx == 0:
                 continue
             ghost = proto.copyTo(self.render)
             ghost.setPos(self.render, pos[0], pos[1], pos[2])
             ghost.setHpr(self.render, hpr[0], hpr[1], hpr[2])
-            # Draw markers behind the avatar overlays.
             ghost.setBin("fixed", 5)
             ghost.setDepthWrite(False)
             self._path_markers.append(ghost)
-        return Task.cont
 
     # ---- debug UI ----
     def _init_imgui(self) -> None:
@@ -667,21 +768,46 @@ class SpacebotLinkApp(ShowBase):
         scr_h = io.display_size.y or 1080.0
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
-        imgui.set_next_window_size((660, 400), imgui.Cond_.once)
+        imgui.set_next_window_size((700, 440), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
         fps_text = self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate
         imgui.text(f"FPS: {fps_text:.1f}")
 
+        imgui.separator()
+        imgui.text(f"Mode: {self.ui.mode}")
+        changed_goal, publish_nav = imgui.checkbox(
+            "Publish goals/paths", self._nav_publishing_enabled
+        )
+        if changed_goal:
+            self._nav_publishing_enabled = publish_nav
+        imgui.same_line()
+        changed_move, move_robot = imgui.checkbox(
+            "Control robot (cmd_vel)", self._move_robot
+        )
+        if changed_move:
+            self._set_move_mode(move_robot)
+
+        if self.ui.mode == "Goal Mode":
+            if self._last_goal_pose is not None:
+                (gx, gy, gz), (gh, gp, gr) = self._last_goal_pose
+                imgui.text(f"Goal pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                imgui.text(f"Goal HPR (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+            else:
+                imgui.text("Goal: none")
+        else:
+            imgui.text(f"Follow path waypoints: {len(self._follow_path_points)}")
+
         imgui.spacing()
+        imgui.columns(2, "pose_columns", False)
         imgui.text("Avatar pose")
         av_pos, av_hpr = self.avatar.get_pose()
         av_ros = panda_pose_to_ros((av_pos, av_hpr))
         if av_ros is not None:
             pos_ros = av_ros["position"]
             imgui.text(
-                f"  position (m):  {pos_ros['x']:.2f}, {pos_ros['y']:.2f}, {pos_ros['z']:.2f}"
+                f"  pos (m): {pos_ros['x']:.2f}, {pos_ros['y']:.2f}, {pos_ros['z']:.2f}"
             )
             rpy_ros = self._quat_to_rpy_deg(
                 av_ros["orientation"]["x"],
@@ -691,24 +817,21 @@ class SpacebotLinkApp(ShowBase):
             )
             if rpy_ros is not None:
                 roll, pitch, yaw = rpy_ros
-                imgui.text(
-                    f"  orientation (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}"
-                )
+                imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
         else:
-            imgui.text("  waiting for avatar pose")
+            imgui.text("  waiting for pose")
 
-        imgui.spacing()
-        imgui.text("Robot pose (/space_cobot/pose)")
+        imgui.next_column()
+        imgui.text("Robot pose")
         if self._last_ros_pose is not None:
             (x, y, z), rpy = self._last_ros_pose
-            imgui.text(f"  position (m):  {x:.2f}, {y:.2f}, {z:.2f}")
+            imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
             if rpy is not None:
                 roll, pitch, yaw = rpy
-                imgui.text(
-                    f"  orientation (deg): roll {roll:.1f}, pitch {pitch:.1f}, yaw {yaw:.1f}"
-                )
+                imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
         else:
             imgui.text("  waiting for /space_cobot/pose")
+        imgui.columns(1)
 
         if av_ros is not None and self._last_ros_pose is not None:
             dx = pos_ros["x"] - self._last_ros_pose[0][0]
@@ -717,19 +840,6 @@ class SpacebotLinkApp(ShowBase):
             dist = sqrt(dx * dx + dy * dy + dz * dz)
             imgui.spacing()
             imgui.text(f"Avatar-robot position error: {dist:.3f} m")
-
-        imgui.separator()
-        changed_move, move_robot = imgui.checkbox(
-            "Control robot (publish cmd_vel)", self._move_robot
-        )
-        if changed_move:
-            self._set_move_mode(move_robot)
-
-        changed_goal, publish_goals = imgui.checkbox(
-            "Publish goals", self._goal_publishing_enabled
-        )
-        if changed_goal:
-            self._goal_publishing_enabled = publish_goals
 
         imgui.end()
 
@@ -777,10 +887,10 @@ class SpacebotLinkApp(ShowBase):
         g_base, g_hover, g_active = _mode_colors(not is_follow)
 
         if _button("Follow", (half, btn_h), f_base, f_hover, f_active):
-            self.ui.set_mode("Follow Mode")
+            self._activate_follow_mode()
         imgui.same_line()
         if _button("Goal", (half, btn_h), g_base, g_hover, g_active):
-            self.ui.set_mode("Goal Mode")
+            self._activate_goal_mode()
 
         imgui.spacing()
         imgui.text_colored((0.82, 0.90, 1.00, 1.0), f"Active Mode: {self.ui.mode}")
@@ -813,6 +923,21 @@ class SpacebotLinkApp(ShowBase):
         h, p, r = self._last_robot_hpr
         self.avatar.set_hpr(h, p, r)
 
+    def _activate_goal_mode(self) -> None:
+        """Switch to goal mode and clear any pending follow path."""
+        if self.ui.mode == "Goal Mode":
+            return
+        self.ui.set_mode("Goal Mode")
+        self._follow_path_points.clear()
+
+    def _activate_follow_mode(self) -> None:
+        """Switch to follow mode and seed the path with the current avatar pose."""
+        if self.ui.mode == "Follow Mode":
+            return
+        self.ui.set_mode("Follow Mode")
+        self._follow_path_points.clear()
+        self._follow_path_points.append(self.avatar.get_pose())
+
     def _publish_goal_for_pose(
         self, pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
     ) -> None:
@@ -827,9 +952,9 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             pass
 
-    def _set_avatar_to_robot_pose(self) -> Optional[
-        Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ]:
+    def _set_avatar_to_robot_pose(
+        self,
+    ) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
         """Snap avatar to latest robot pose without publishing."""
         if self._last_robot_pose_panda is None:
             return None
@@ -842,7 +967,7 @@ class SpacebotLinkApp(ShowBase):
         """Stop the robot and align avatar to the freshest robot pose."""
         # Immediately command zero twist to halt motion.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        # Mark for goal publish on the next pose sample (or now if available).
+        # Mark for goal/path publish on the next pose sample (or now if available).
         self._pending_abort_goal = True
         self._maybe_finalize_abort()
 
@@ -854,6 +979,11 @@ class SpacebotLinkApp(ShowBase):
         if pose is None:
             return
         self._publish_goal_for_pose(pose)
+        # Reset follow path to this pose so the planner sees a stable hold and local
+        # visualization updates without requiring manual nudge.
+        if self.ui.mode == "Follow Mode":
+            self._follow_path_points = [pose]
+        self._publish_hold_path(pose)
         # Ensure stop command accompanies the goal.
         self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._pending_abort_goal = False

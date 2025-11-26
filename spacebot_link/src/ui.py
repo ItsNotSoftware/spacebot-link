@@ -9,7 +9,7 @@ class UI:
 
     def __init__(self, base: ShowBase, on_abort: Optional[Callable[[], None]] = None):
         self.base = base
-        self.mode: str = "Follow Mode"
+        self.mode: str = "Goal Mode"
         self.move_target: str = "Avatar"  # "Avatar" or "Robot"
         self._last_status: str = ""
         self._on_abort = on_abort
