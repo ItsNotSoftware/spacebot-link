@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from direct.gui.DirectGui import DirectFrame, DirectButton
 from direct.gui import DirectGuiGlobals as DGG
 from panda3d.core import (
@@ -16,6 +17,12 @@ from direct.interval.LerpInterval import LerpPosInterval
 from typing import Tuple, List
 from direct.showbase.ShowBase import ShowBase
 
+BODY_ARC_RADIUS = 8.6
+BODY_ARC_VERTICAL_SCALE = 0.42
+BODY_ARC_SEGMENTS = 64
+BODY_ARC_COLOR = (0.12, 0.11, 0.12, 0.82)
+BODY_ARC_Z_OFFSET = 0.0
+
 
 class UI:
     def __init__(self, base: ShowBase):
@@ -28,6 +35,7 @@ class UI:
         base.accept("2", lambda: self._bump_fov(+2))
 
         self._build_mode_selector()
+        self._build_body_arc()
 
     def update(self, extra: str = "") -> None:
         self._last_status = extra
@@ -245,3 +253,52 @@ class UI:
         """Update the move target label in the HUD ("Avatar" or "Robot")."""
         self.move_target = target
         self.update("")
+
+    def _build_body_arc(self) -> None:
+        root = DirectFrame(
+            parent=self.base.a2dBottomCenter,
+            frameColor=(0, 0, 0, 0),
+            frameSize=(0, 0, 0, 0),
+            pos=(0.0, 0.0, BODY_ARC_Z_OFFSET),
+        )
+        arc_np = self._semicircle_node(
+            BODY_ARC_RADIUS, BODY_ARC_VERTICAL_SCALE, BODY_ARC_SEGMENTS, BODY_ARC_COLOR
+        )
+        arc_np.reparentTo(root)
+        arc_np.setBin("fixed", 0)
+
+    def _semicircle_node(
+        self,
+        radius: float,
+        vertical_scale: float,
+        segments: int,
+        color: Tuple[float, float, float, float],
+    ) -> NodePath:
+        segments = max(6, int(segments))
+        fmt = GeomVertexFormat.getV3c4()
+        vdata = GeomVertexData("semicircle", fmt, Geom.UH_static)
+        vw = GeomVertexWriter(vdata, "vertex")
+        cw = GeomVertexWriter(vdata, "color")
+
+        vw.addData3f(0.0, 0.0, 0.0)
+        cw.addData4f(*color)
+
+        for i in range(segments + 1):
+            t = i / float(segments)
+            angle = math.pi + t * math.pi  # sweep from -pi to 0 (180 degrees)
+            x = math.cos(angle) * radius
+            z = math.sin(angle) * radius * vertical_scale
+            vw.addData3f(x, 0.0, z)
+            cw.addData4f(*color)
+
+        tris = GeomTriangles(Geom.UH_static)
+        for i in range(1, segments + 1):
+            tris.addVertices(0, i, i + 1)
+
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        node = GeomNode("semicircle")
+        node.addGeom(geom)
+        np = NodePath(node)
+        np.setTransparency(TransparencyAttrib.M_alpha)
+        return np

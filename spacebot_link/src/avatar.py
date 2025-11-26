@@ -13,8 +13,8 @@ from panda3d.core import NodePath
 # Avatar is modeled around the robot body center, but our world origin tracks
 # the camera optical center. These offsets shift the model so that placing the
 # avatar at (0, 0, 0) aligns the camera center instead of the mesh centroid.
-CAMERA_FORWARD_OFFSET_M = 0.36
-CAMERA_UP_OFFSET_M = 0.13
+CAMERA_FORWARD_OFFSET_M = 0.40
+CAMERA_UP_OFFSET_M = 0.16
 AVATAR_CAMERA_OFFSET = (0.0, -CAMERA_FORWARD_OFFSET_M, -CAMERA_UP_OFFSET_M)
 
 
@@ -104,6 +104,7 @@ class Avatar:
         curr_q: Quat = self._front.getQuat()
         dq = Quat()
         dq.setHpr((dh, dp, dr))
-        new_q = curr_q * dq
+        # Pre-multiply so incremental rotations happen in the avatar's local/body frame
+        new_q = dq * curr_q
         self._back.setQuat(new_q)
         self._front.setQuat(new_q)

@@ -55,6 +55,7 @@ YAW_RIGHT_BUTTON = KeyboardButton.ascii_key("o")
 ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("j")
 ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("l")
 RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
+RESET_TO_ROBOT_ORIENT_BUTTON = KeyboardButton.backspace()
 
 # Topics used by your ROS→ZMQ bridge
 TOPIC_IMAGE = "/main_camera/image"
@@ -149,6 +150,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_goal_pose: Optional[
             Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = None
+        self._last_robot_hpr: Optional[Tuple[float, float, float]] = None
         self._imgui_ready: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
@@ -278,6 +280,7 @@ class SpacebotLinkApp(ShowBase):
                 parsed = ros_pose_to_panda_pos_hpr(payload)
                 if parsed is not None:
                     pos, hpr = parsed
+                    self._last_robot_hpr = hpr
                     self.camera.setPos(self.render, pos[0], pos[1], pos[2])
                     self.camera.setHpr(self.render, hpr[0], hpr[1], hpr[2])
                     self._last_cam_pos_hpr = (pos, hpr)
@@ -323,6 +326,11 @@ class SpacebotLinkApp(ShowBase):
                 dr -= step
             if dh or dp or dr:
                 self.avatar.add_hpr(dh, dp, dr)
+            if (
+                mw.is_button_down(RESET_TO_ROBOT_ORIENT_BUTTON)
+                and self._last_robot_hpr is not None
+            ):
+                self.avatar.set_hpr(*self._last_robot_hpr)
             if mw.is_button_down(RESET_ORIENT_BUTTON):
                 self.avatar.reset_hpr()
         else:
