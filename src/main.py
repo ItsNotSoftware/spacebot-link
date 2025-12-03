@@ -168,6 +168,7 @@ class SpacebotLinkApp(ShowBase):
         self._follow_reached_thresh: float = 0.2
         self._follow_sample_period: float = 0.15
         self._imgui_ready: bool = False
+        self._imgui_ini_path: Path = Path(__file__).resolve().parent.parent / "imgui.ini"
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -508,6 +509,7 @@ class SpacebotLinkApp(ShowBase):
 
     def _cleanup(self) -> None:
         """Close all bus publishers/subscribers on exit."""
+        self._save_imgui_settings()
         try:
             self.bus_sensors.close()
         except Exception:
@@ -521,6 +523,16 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             pass
         self._clear_path_markers()
+
+    def _save_imgui_settings(self) -> None:
+        """Persist ImGui layout/settings to disk."""
+        if not self._imgui_ready:
+            return
+        try:
+            self._imgui_ini_path.parent.mkdir(parents=True, exist_ok=True)
+            imgui.save_ini_settings_to_disk(str(self._imgui_ini_path))
+        except Exception:
+            pass
 
     # ---- control helpers ----
     def _set_move_mode(self, move_robot: bool) -> None:
@@ -756,6 +768,8 @@ class SpacebotLinkApp(ShowBase):
         """Initialize the ImGui overlay if available."""
         try:
             p3dimgui.init()
+            if self._imgui_ini_path.exists():
+                imgui.load_ini_settings_from_disk(str(self._imgui_ini_path))
             style = imgui.get_style()
             style.font_size_base = 22.0  # request larger base font size
             style.font_scale_main = 1.25
