@@ -30,9 +30,6 @@ class UI:
         self._imgui_ready: bool = False
         self._imgui_ini_path: Path = Path(__file__).resolve().parent.parent / "imgui.ini"
 
-        base.accept("1", lambda: self._bump_fov(-2))
-        base.accept("2", lambda: self._bump_fov(+2))
-
         self._init_imgui()
 
     def _bump_fov(self, delta: float) -> None:
@@ -146,6 +143,7 @@ class UI:
                     imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
                 else:
                     imgui.text("  waiting for goal")
+            imgui.text(f"  path poses: {status.get('path_pose_count', 0)}")
         else:
             imgui.text("Follow path")
             imgui.text(f"  buffered poses: {status.get('waypoint_count', 0)}")
@@ -153,6 +151,42 @@ class UI:
             if tip is not None:
                 fx, fy, fz = tip
                 imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
+        imgui.end_child()
+
+        imgui.spacing()
+        imgui.begin_child("PathViz", (0, 190), True)
+        imgui.text("Path visualization")
+        modes = ["poses", "poses_line", "animated"]
+        current_mode = status.get("path_mode", modes[0])
+        try:
+            idx = modes.index(current_mode)
+        except ValueError:
+            idx = 0
+        changed_mode, new_idx = imgui.combo("Mode", idx, modes)
+        if changed_mode:
+            status.get("set_path_mode", lambda _m: None)(modes[new_idx])
+
+        if modes[new_idx] == "poses":
+            pose_stride = int(status.get("pose_stride", 4))
+            imgui.text("Ghost stride (every Nth pose)")
+            imgui.set_next_item_width(140)
+            changed, pose_stride = imgui.input_int("##pose_stride", pose_stride)
+            if changed:
+                status.get("set_pose_stride", lambda _v: None)(max(1, pose_stride))
+        elif modes[new_idx] == "poses_line":
+            line_stride = int(status.get("line_stride", 8))
+            imgui.text("Ghost stride (every Nth pose)")
+            imgui.set_next_item_width(140)
+            changed, line_stride = imgui.input_int("##line_stride", line_stride)
+            if changed:
+                status.get("set_line_stride", lambda _v: None)(max(1, line_stride))
+        else:
+            anim_speed = float(status.get("anim_speed", 1.0))
+            imgui.text("Anim speed (m/s)")
+            imgui.set_next_item_width(140)
+            changed, anim_speed = imgui.input_float("##anim_speed", anim_speed, step=0.0)
+            if changed:
+                status.get("set_anim_speed", lambda _v: None)(max(0.01, anim_speed))
         imgui.end_child()
 
         imgui.spacing()

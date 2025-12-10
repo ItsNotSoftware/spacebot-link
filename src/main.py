@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, List
 
 from panda3d.core import loadPrcFileData, PythonTask
 from direct.showbase.ShowBase import ShowBase
@@ -79,6 +79,7 @@ class SpacebotLinkApp(ShowBase):
         self._fps_samples = deque(maxlen=120)
         self._avg_fps: float = 0.0
         self._robot_stopped_last: bool = False
+        self._last_path_poses: List = []
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -184,6 +185,7 @@ class SpacebotLinkApp(ShowBase):
             self._last_path_data = payload
             poses = parse_ros_path(payload)
             self.renderer.render_path_markers(poses)
+            self._last_path_poses = poses
         return Task.cont
 
     # ---- helpers ----
@@ -210,6 +212,7 @@ class SpacebotLinkApp(ShowBase):
             "nav_enabled": self.nav.state.nav_publishing_enabled,
             "waypoint_count": len(self.nav.state.follow_path_points),
             "follow_tip": follow_tip,
+            "path_pose_count": len(self._last_path_poses),
             "last_goal_ros": (
                 panda_pose_to_ros_tuple(self.nav.state.last_goal_pose)
                 if self.nav.state.last_goal_pose
@@ -224,6 +227,14 @@ class SpacebotLinkApp(ShowBase):
             "activate_follow": self._activate_follow_mode,
             "activate_goal": self._activate_goal_mode,
             "reset_orientation": self.renderer.reset_avatar_to_camera_hpr,
+            "path_mode": self.renderer.path_mode,
+            "pose_stride": self.renderer.pose_stride,
+            "line_stride": self.renderer.line_stride,
+            "anim_speed": self.renderer.anim_speed,
+            "set_path_mode": self._set_path_mode,
+            "set_pose_stride": self._set_pose_stride,
+            "set_line_stride": self._set_line_stride,
+            "set_anim_speed": self._set_anim_speed,
         }
 
     def _set_nav_enabled(self, enabled: bool) -> None:
@@ -237,6 +248,7 @@ class SpacebotLinkApp(ShowBase):
         self.ui.set_mode("Goal Mode")
         self.nav.set_mode("Goal Mode")
         self.nav.state.last_goal_pose = self.renderer.get_avatar_pose()
+        self._rerender_path()
 
     def _activate_follow_mode(self) -> None:
         """Switch to follow mode and seed path with avatar pose."""
@@ -245,12 +257,15 @@ class SpacebotLinkApp(ShowBase):
         self.ui.set_mode("Follow Mode")
         self.nav.set_mode("Follow Mode")
         self.nav.set_follow_seed(self.renderer.get_avatar_pose())
+        self._last_path_poses = []
+        self._rerender_path()
 
     def _abort_to_robot_pose(self) -> None:
         """Abort motion by snapping avatar to robot pose and sending hold path."""
         self._publish_cmd_vel_zero()
         self.nav.abort_to_robot_pose(self.renderer)
         self._publish_cmd_vel_zero()
+        self._rerender_path()
 
     def _publish_cmd_vel_zero(self) -> None:
         """Publish a zero-velocity command."""
@@ -273,6 +288,30 @@ class SpacebotLinkApp(ShowBase):
             if self.nav.state.last_robot_pose_panda is not None:
                 self.renderer.sync_avatar_to_robot(self.nav.state.last_robot_pose_panda)
         self._robot_stopped_last = is_zero
+
+    def _rerender_path(self) -> None:
+        """Force a re-render of the current path with latest viz settings."""
+        if self.ui.mode == "Follow Mode":
+            self.renderer.render_path_markers(self.nav.state.follow_path_points)
+        elif self._last_path_poses:
+            self.renderer.render_path_markers(self._last_path_poses)
+
+    # ---- path viz setters ----
+    def _set_path_mode(self, mode: str) -> None:
+        self.renderer.set_path_mode(mode)
+        self._rerender_path()
+
+    def _set_pose_stride(self, stride: int) -> None:
+        self.renderer.set_pose_stride(stride)
+        self._rerender_path()
+
+    def _set_line_stride(self, stride: int) -> None:
+        self.renderer.set_line_stride(stride)
+        self._rerender_path()
+
+    def _set_anim_speed(self, speed: float) -> None:
+        self.renderer.set_anim_speed(speed)
+        self._rerender_path()
 
     # ---- cleanup ----
     def _cleanup(self) -> None:

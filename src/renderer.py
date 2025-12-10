@@ -10,6 +10,7 @@ from panda3d.core import (
     AmbientLight,
     CardMaker,
     DirectionalLight,
+    LineSegs,
     NodePath,
     Texture,
     TextureStage,
@@ -36,6 +37,16 @@ class Renderer:
         self._path_proto: Optional[NodePath] = None
         self._path_proto_failed: bool = False
         self._bg_aspect: float = 0.0
+        self._path_line: Optional[NodePath] = None
+        self._anim_np: Optional[NodePath] = None
+        self._anim_task_name = "PathGhostAnim"
+        self._anim_path: List[PoseTuple] = []
+        self._anim_idx: int = 0
+        self._anim_t: float = 0.0
+        self.path_mode: str = "poses"  # poses | poses_line | animated
+        self.pose_stride: int = 4
+        self.line_stride: int = 8
+        self.anim_speed: float = 1.0  # units per second
 
         self._init_lights()
         self._make_bg_card(initial_aspect=9 / 16)
@@ -120,6 +131,103 @@ class Renderer:
         ).resolve()
         return fallback if fallback.exists() else None
 
+    def _draw_path_line(
+        self, poses: List[PoseTuple], color: Tuple[float, float, float, float] = (0.95, 0.80, 0.20, 0.9)
+    ) -> None:
+        """Draw a line strip through all poses to preserve path continuity."""
+        if len(poses) < 2:
+            return
+        segs = LineSegs("path_line")
+        segs.setThickness(4.0)
+        segs.setColor(*color)
+        first = True
+        for pos, _ in poses:
+            x, y, z = pos
+            if first:
+                segs.moveTo(x, y, z)
+                first = False
+            else:
+                segs.drawTo(x, y, z)
+        node = segs.create()
+        if node is None:
+            return
+        np_line = self.base.render.attachNewNode(node)
+        np_line.setBin("fixed", 4)
+        np_line.setDepthWrite(False)
+        np_line.setDepthTest(False)
+        self._path_line = np_line
+
+    # ---- animated ghost ----
+    def _start_path_animation(self, poses: List[PoseTuple]) -> None:
+        """Animate a single ghost along the provided path."""
+        self._stop_path_animation()
+        if len(poses) < 2:
+            return
+        if self._path_proto is None:
+            self._path_proto = self.load_path_proto()
+        proto = self._path_proto
+        if proto is None:
+            return
+        self._anim_np = proto.copyTo(self.base.render)
+        self._anim_np.setBin("fixed", 5)
+        self._anim_np.setDepthWrite(False)
+        self._anim_path = poses
+        self._anim_idx = 0
+        self._anim_t = 0.0
+        start_pos, start_hpr = poses[0]
+        self._anim_np.setPos(self.base.render, *start_pos)
+        self._anim_np.setHpr(self.base.render, *start_hpr)
+        self.base.taskMgr.add(self._anim_task, self._anim_task_name)
+
+    def _stop_path_animation(self) -> None:
+        """Stop path animation and remove animated ghost."""
+        try:
+            self.base.taskMgr.remove(self._anim_task_name)
+        except Exception:
+            pass
+        if self._anim_np is not None:
+            try:
+                self._anim_np.removeNode()
+            except Exception:
+                pass
+        self._anim_np = None
+        self._anim_path = []
+        self._anim_idx = 0
+        self._anim_t = 0.0
+
+    def _anim_task(self, task) -> int:
+        """Advance animated ghost along the path with constant linear speed."""
+        if self._anim_np is None or len(self._anim_path) < 2:
+            return task.done
+        dt = self.base.taskMgr.globalClock.getDt()
+        speed = max(0.01, self.anim_speed)
+        # current segment endpoints
+        curr = self._anim_path[self._anim_idx]
+        nxt = self._anim_path[self._anim_idx + 1]
+        (x1, y1, z1), hpr1 = curr
+        (x2, y2, z2), hpr2 = nxt
+        dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
+        seg_len = max(1e-6, (dx * dx + dy * dy + dz * dz) ** 0.5)
+        # advance along segment
+        self._anim_t += (speed * dt) / seg_len
+        if self._anim_t >= 1.0:
+            self._anim_idx += 1
+            if self._anim_idx >= len(self._anim_path) - 1:
+                # Loop back to start for continuous animation.
+                self._anim_idx = 0
+                self._anim_t = 0.0
+                return task.cont
+            self._anim_t = 0.0
+            return task.cont
+        t = self._anim_t
+        # linear interp position and simple HPR lerp
+        pos = (x1 + dx * t, y1 + dy * t, z1 + dz * t)
+        h = hpr1[0] + (hpr2[0] - hpr1[0]) * t
+        p = hpr1[1] + (hpr2[1] - hpr1[1]) * t
+        r = hpr1[2] + (hpr2[2] - hpr1[2]) * t
+        self._anim_np.setPos(self.base.render, *pos)
+        self._anim_np.setHpr(self.base.render, h, p, r)
+        return task.cont
     # ---- avatar helpers ----
     def get_avatar_pose(self) -> PoseTuple:
         """Return avatar pose (pos, hpr) in world coordinates."""
@@ -195,6 +303,13 @@ class Renderer:
 
     def clear_path_markers(self) -> None:
         """Remove any existing path markers from the scene graph."""
+        self._stop_path_animation()
+        if self._path_line is not None:
+            try:
+                self._path_line.removeNode()
+            except Exception:
+                pass
+            self._path_line = None
         for np_ in self._path_markers:
             try:
                 np_.removeNode()
@@ -207,13 +322,22 @@ class Renderer:
         self.clear_path_markers()
         if not poses:
             return
+        if self.path_mode == "animated":
+            self._start_path_animation(poses)
+            return
+
         if self._path_proto is None:
             self._path_proto = self.load_path_proto()
         proto = self._path_proto
         if proto is None:
             return
+
+        stride = self.pose_stride if self.path_mode == "poses" else self.line_stride
+        stride = max(1, int(stride))
+        last_idx = len(poses) - 1
         for idx, (pos, hpr) in enumerate(poses):
-            if idx % 4 != 0 or idx == 0:
+            # Always render first and last pose, otherwise stride-filter.
+            if idx not in (0, last_idx) and idx % stride != 0:
                 continue
             ghost = proto.copyTo(self.base.render)
             ghost.setPos(self.base.render, pos[0], pos[1], pos[2])
@@ -222,10 +346,32 @@ class Renderer:
             ghost.setDepthWrite(False)
             self._path_markers.append(ghost)
 
+        if self.path_mode == "poses_line":
+            self._draw_path_line(poses)
+
     def sync_avatar_to_robot(self, robot_pose: PoseTuple) -> PoseTuple:
         """Align the avatar with the provided robot pose."""
         pos, hpr = robot_pose
         return self.set_avatar_pose(pos, hpr)
+
+    # ---- path viz configuration ----
+    def set_path_mode(self, mode: str) -> None:
+        """Update path visualization mode."""
+        if mode not in ("poses", "poses_line", "animated"):
+            return
+        self.path_mode = mode
+
+    def set_pose_stride(self, stride: int) -> None:
+        """Render pose ghosts at every Nth pose (stride)."""
+        self.pose_stride = max(1, int(stride))
+
+    def set_line_stride(self, stride: int) -> None:
+        """Render pose+line ghosts at every Nth pose (stride)."""
+        self.line_stride = max(1, int(stride))
+
+    def set_anim_speed(self, speed: float) -> None:
+        """Set animation speed for animated path mode."""
+        self.anim_speed = max(0.01, float(speed))
 
     def publish_hold_path(
         self, cmd_pub: Any, pose: PoseTuple, ros_pose_override: Optional[dict] = None
