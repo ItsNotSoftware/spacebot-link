@@ -59,21 +59,20 @@ class TeleopBusSub:
                 pass
         return count
 
-    def get(self, topic: str, default=None):
+    def get(self, topic: str, default=None) -> Any:
+        """Return cached payload for topic or default."""
         return self.latest.get(topic, default)
 
     # ---------- image helpers ----------
     def get_image_rgb(self, topic: str) -> Optional[np.ndarray]:
-        """Return the latest image for `topic` as an RGB numpy array, or None.
-        Accepts payloads that look like ROS `sensor_msgs/Image` where
-        `data` is base64 encoded and fields include `width`, `height`, `encoding`.
-        """
+        """Return latest image for topic as an RGB numpy array, or None."""
         payload = self.get(topic)
         if not isinstance(payload, dict):
             return None
         return self._decode_image_message(payload)
 
     def _decode_image_message(self, payload: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Decode ROS-like image dict (base64 data + metadata) into RGB array."""
         try:
             width = int(payload.get("width"))  # type: ignore
             height = int(payload.get("height"))  # type: ignore
@@ -117,6 +116,7 @@ class TeleopBusSub:
         return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
     def close(self) -> None:
+        """Close subscriber socket."""
         try:
             self._sock.close(0)
         except Exception:
@@ -143,6 +143,7 @@ class TeleopBusPub:
         self._sock.connect(endpoint)
 
     def publish(self, topic: str, data: Dict[str, Any]) -> None:
+        """Publish JSON payload on a topic via PUB socket."""
         try:
             msg = json.dumps({"topic": topic, "data": data})
             self._sock.send_string(msg, flags=zmq.NOBLOCK)
@@ -152,6 +153,7 @@ class TeleopBusPub:
             pass
 
     def close(self) -> None:
+        """Close publisher socket."""
         try:
             self._sock.close(0)
         except Exception:

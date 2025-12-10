@@ -30,6 +30,7 @@ class Avatar:
         pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         hpr: Tuple[float, float, float] = (0, 0, 0),
     ):
+        """Load avatar model and set up dual-pass transparent rendering."""
         self._parent: NodePath = parent
         base_np: NodePath = cast(NodePath, loader.loadModel(gltf_path))
         if base_np.isEmpty():
@@ -63,15 +64,18 @@ class Avatar:
         self._front.setBin("fixed", 11)
 
     def set_pos(self, x: float, y: float, z: float) -> None:
+        """Place avatar at given world position."""
         # Explicitly set in parent/world space
         self._back.setPos(self._parent, x, y, z)
         self._front.setPos(self._parent, x, y, z)
 
     def set_hpr(self, h: float, p: float, r: float) -> None:
+        """Set avatar heading/pitch/roll."""
         self._back.setHpr(h, p, r)
         self._front.setHpr(h, p, r)
 
     def get_hpr(self) -> Tuple[float, float, float]:
+        """Return current avatar heading/pitch/roll."""
         h, p, r = self._front.getHpr()
         return float(h), float(p), float(r)
 
@@ -87,13 +91,16 @@ class Avatar:
         return (float(px), float(py), float(pz)), (float(h), float(p), float(r))
 
     def reset_hpr(self) -> None:
+        """Restore avatar orientation to initial HPR."""
         self.set_hpr(*self._init_hpr)
 
     def set_scale(self, s: float) -> None:
+        """Uniformly scale avatar geometry."""
         self._back.setScale(s)
         self._front.setScale(s)
 
     def move_world(self, dx: float, dy: float, dz: float) -> None:
+        """Translate avatar in world space by provided deltas."""
         # Apply deltas in parent/world coordinates, independent of node's local HPR
         bx, by, bz = self._back.getPos(self._parent)
         fx, fy, fz = self._front.getPos(self._parent)
@@ -101,6 +108,7 @@ class Avatar:
         self._front.setPos(self._parent, fx + dx, fy + dy, fz + dz)
 
     def add_hpr(self, dh: float, dp: float, dr: float) -> None:
+        """Increment avatar orientation in its local/body frame."""
         curr_q: Quat = self._front.getQuat()
         dq = Quat()
         dq.setHpr((dh, dp, dr))
