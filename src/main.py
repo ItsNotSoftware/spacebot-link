@@ -184,9 +184,24 @@ class SpacebotLinkApp(ShowBase):
         ):
             self._last_path_data = payload
             poses = parse_ros_path(payload)
+            poses = self._prepend_robot_pose_if_needed(poses)
             self.renderer.render_path_markers(poses)
             self._last_path_poses = poses
         return Task.cont
+
+    def _prepend_robot_pose_if_needed(self, poses: List) -> List:
+        """Ensure path lines originate at the current robot pose."""
+        if not poses:
+            return poses
+        robot_pose = self.nav.state.last_robot_pose_panda
+        if robot_pose is None:
+            return poses
+        (rx, ry, rz), _ = robot_pose
+        (px, py, pz), _ = poses[0]
+        dist = ((px - rx) ** 2 + (py - ry) ** 2 + (pz - rz) ** 2) ** 0.5
+        if dist > 1e-3:
+            return [robot_pose] + poses
+        return poses
 
     # ---- helpers ----
     def _collect_status(self) -> Dict[str, Any]:

@@ -386,14 +386,12 @@ class Renderer:
                 cx = 0.5 * (mn.x + mx.x)
                 cy = 0.5 * (mn.y + mx.y)
                 cz = 0.5 * (mn.z + mx.z)
-                # Nudge ghost mesh relative to camera: right by forward offset, down by up offset.
                 proto_model.setPos(
-                    -cx + 0.1,
+                    -cx,
                     -cy,
-                    -cz - 0.1,
+                    -cz,
                 )
         except Exception:
-            # If bounds fail, fall back to origin.
             pass
         return container
 
