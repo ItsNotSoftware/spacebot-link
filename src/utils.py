@@ -9,7 +9,7 @@ from __future__ import annotations
 from math import asin, atan, atan2, degrees, pi, sqrt
 from typing import Any, Dict, List, Optional, Tuple
 
-from panda3d.core import PerspectiveLens, Quat
+from panda3d.core import PerspectiveLens, Quat, Vec3
 
 __all__ = [
     "apply_opencv_intrinsics_to_lens",
@@ -22,6 +22,7 @@ __all__ = [
     "panda_pose_to_ros_tuple",
     "is_zero_cmd_vel",
     "parse_ros_path",
+    "apply_offset_to_pose",
 ]
 
 PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -189,7 +190,9 @@ def panda_pose_to_ros(
     return {"position": pos_ros, "orientation": ori_ros}
 
 
-def quat_to_rpy_deg(qx: float, qy: float, qz: float, qw: float) -> Optional[Tuple[float, float, float]]:
+def quat_to_rpy_deg(
+    qx: float, qy: float, qz: float, qw: float
+) -> Optional[Tuple[float, float, float]]:
     """Convert quaternion components into roll, pitch, yaw in degrees."""
     try:
         qx = float(qx)
@@ -217,7 +220,9 @@ def quat_to_rpy_deg(qx: float, qy: float, qz: float, qw: float) -> Optional[Tupl
     return (degrees(roll), degrees(pitch), degrees(yaw))
 
 
-def extract_ros_pose(payload: dict) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float], dict]]:
+def extract_ros_pose(
+    payload: dict,
+) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float], dict]]:
     """Normalize incoming ROS pose payload into position, rpy, and orientation."""
     pose = payload.get("pose") if isinstance(payload, dict) else None
     if isinstance(pose, dict):
@@ -267,6 +272,21 @@ def panda_pose_to_ros_tuple(pose: PoseTuple) -> Optional[PoseTuple]:
     if rpy is None:
         return None
     return (pos["x"], pos["y"], pos["z"]), rpy
+
+
+def apply_offset_to_pose(
+    pos_hpr: PoseTuple, offset: Tuple[float, float, float]
+) -> PoseTuple:
+    """Translate a pose by an offset expressed in the pose's local frame."""
+    (x, y, z), (h, p, r) = pos_hpr
+    ox, oy, oz = offset
+    q = Quat()
+    q.setHpr((h, p, r))
+    delta = q.xform(Vec3(ox, oy, oz))
+    return (
+        (float(x + delta.x), float(y + delta.y), float(z + delta.z)),
+        (float(h), float(p), float(r)),
+    )
 
 
 def is_zero_cmd_vel(payload: dict, eps: float = 1e-4) -> bool:

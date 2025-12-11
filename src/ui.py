@@ -71,9 +71,9 @@ class UI:
             if self._imgui_ini_path.exists():
                 imgui.load_ini_settings_from_disk(str(self._imgui_ini_path))
             style = imgui.get_style()
-            style.font_size_base = 22.0
-            style.font_scale_main = 1.25
-            style.scale_all_sizes(1.25)
+            style.font_size_base = 23.0
+            style.font_scale_main = 1.3
+            style.scale_all_sizes(1.3)
             style.window_rounding = 8.0
             style.child_rounding = 8.0
             style.frame_rounding = 6.0
@@ -100,7 +100,7 @@ class UI:
         scr_h = io.display_size.y or 1080.0
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
-        imgui.set_next_window_size((860, 520), imgui.Cond_.once)
+        imgui.set_next_window_size((1000, 620), imgui.Cond_.once)
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
@@ -127,7 +127,7 @@ class UI:
             status.get("set_move_mode", lambda _v: None)(move_robot)
 
         imgui.spacing()
-        imgui.begin_child("Nav", (0, 140), True)
+        imgui.begin_child("Nav", (0, 160), True)
         if status.get("mode") == "Goal Mode":
             imgui.text("Goal")
             ros_goal = status.get("last_goal_ros")
@@ -154,7 +154,7 @@ class UI:
         imgui.end_child()
 
         imgui.spacing()
-        imgui.begin_child("PathViz", (0, 190), True)
+        imgui.begin_child("PathViz", (0, 220), True)
         imgui.text("Path visualization")
         modes = ["poses", "poses_line", "animated"]
         current_mode = status.get("path_mode", modes[0])
@@ -187,6 +187,18 @@ class UI:
             changed, anim_speed = imgui.input_float("##anim_speed", anim_speed, step=0.0)
             if changed:
                 status.get("set_anim_speed", lambda _v: None)(max(0.01, anim_speed))
+            anim_instances = int(status.get("anim_instances", 1))
+            imgui.text("Ghost instances")
+            imgui.set_next_item_width(140)
+            changed_count, anim_instances = imgui.input_int("##anim_instances", anim_instances)
+            if changed_count:
+                status.get("set_anim_instances", lambda _v: None)(max(1, anim_instances))
+            anim_line_enabled = bool(status.get("anim_line_enabled", True))
+            changed_line, anim_line_enabled = imgui.checkbox(
+                "Show path line", anim_line_enabled
+            )
+            if changed_line:
+                status.get("set_anim_line_enabled", lambda _v: None)(anim_line_enabled)
         imgui.end_child()
 
         imgui.spacing()

@@ -31,19 +31,22 @@ ROTATE_SPEED = 1.5
 FOLLOW_POS_EPS = 0.02
 FOLLOW_HPR_EPS = 1.0
 FOLLOW_REACHED_THRESH = 0.2
-FOLLOW_SAMPLE_PERIOD = 0.15
+FOLLOW_SAMPLE_PERIOD = 0.2
 # Path visualization defaults
 PATH_MODE_DEFAULT = "poses"  # poses | poses_line | animated
 PATH_POSE_STRIDE = 4
 PATH_LINE_STRIDE = 8
-PATH_ANIM_SPEED = 1.0  # m/s
+PATH_ANIM_SPEED = 4.0  # m/s
+PATH_ANIM_INSTANCES = 3  # number of animated ghosts shown along the path
+PATH_ANIM_LINE_ENABLED = True
 PATH_LINE_COLOR = (0.95, 0.80, 0.20, 0.9)
 PATH_LINE_THICKNESS = 4.0
+PATH_GHOST_SKIP_START = 5  # skip first N poses when drawing ghosts
 
 # Avatar offsets (center camera within the mesh)
-CAMERA_FORWARD_OFFSET_M = 0.40
+CAMERA_FORWARD_OFFSET_M = 0.10
 CAMERA_UP_OFFSET_M = 0.08
-AVATAR_CAMERA_OFFSET = (0.0, -CAMERA_FORWARD_OFFSET_M, -CAMERA_UP_OFFSET_M)
+AVATAR_CAMERA_OFFSET = (0.0, -CAMERA_FORWARD_OFFSET_M, CAMERA_UP_OFFSET_M)
 
 # Key bindings
 FORWARD_BUTTON = KeyboardButton.ascii_key("w")
