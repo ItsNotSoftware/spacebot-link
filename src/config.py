@@ -34,15 +34,19 @@ FOLLOW_REACHED_THRESH = 0.2
 FOLLOW_SAMPLE_PERIOD = 0.2
 
 # Path visualization defaults
-PATH_MODE_DEFAULT = "poses"  # poses | poses_line | animated
+PATH_MODE_DEFAULT = "poses"  # poses | poses_line | animated | planes
 PATH_POSE_STRIDE = 4
 PATH_LINE_STRIDE = 8
 PATH_ANIM_SPEED = 2.5  # m/s
 PATH_ANIM_INSTANCES = 3  # number of animated ghosts shown along the path
 PATH_ANIM_LINE_ENABLED = True
-PATH_LINE_COLOR = (0.05, 1.0, 0.25, 1.0)
+PATH_LINE_COLOR = (0.05, 0.95, 1.0, 1.0)
 PATH_LINE_THICKNESS = 10.0
 PATH_GHOST_SKIP_START = 5  # skip first N poses when drawing ghosts
+PATH_PLANE_SIZE = (1.1, 0.7)  # (width, height) of pose planes in meters
+PATH_PLANE_OUTLINE_COLOR = (0.05, 0.95, 1.0, 1.0)
+PATH_PLANE_FILL_ALPHA = 0.035
+PATH_PLANE_THICKNESS = 5.5
 
 # Avatar offsets (center camera within the mesh)
 CAMERA_FORWARD_OFFSET_M = 0.10
