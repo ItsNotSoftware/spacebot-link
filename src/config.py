@@ -32,15 +32,16 @@ FOLLOW_POS_EPS = 0.02
 FOLLOW_HPR_EPS = 1.0
 FOLLOW_REACHED_THRESH = 0.2
 FOLLOW_SAMPLE_PERIOD = 0.2
+
 # Path visualization defaults
 PATH_MODE_DEFAULT = "poses"  # poses | poses_line | animated
 PATH_POSE_STRIDE = 4
 PATH_LINE_STRIDE = 8
-PATH_ANIM_SPEED = 4.0  # m/s
+PATH_ANIM_SPEED = 2.5  # m/s
 PATH_ANIM_INSTANCES = 3  # number of animated ghosts shown along the path
 PATH_ANIM_LINE_ENABLED = True
-PATH_LINE_COLOR = (0.95, 0.80, 0.20, 0.9)
-PATH_LINE_THICKNESS = 4.0
+PATH_LINE_COLOR = (0.05, 1.0, 0.25, 1.0)
+PATH_LINE_THICKNESS = 10.0
 PATH_GHOST_SKIP_START = 5  # skip first N poses when drawing ghosts
 
 # Avatar offsets (center camera within the mesh)
