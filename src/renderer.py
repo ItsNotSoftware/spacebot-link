@@ -26,6 +26,7 @@ from config import (
     PATH_LINE_THICKNESS,
     PATH_MODE_DEFAULT,
     PATH_POSE_STRIDE,
+    AVATAR_CAMERA_OFFSET,
 )
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
 
@@ -324,11 +325,16 @@ class Renderer:
         if resolved is None:
             self._path_proto_failed = True
             return None
-        proto = self.base.loader.loadModel(str(resolved))
-        if proto is None or proto.isEmpty():
+        proto_model = self.base.loader.loadModel(str(resolved))
+        if proto_model is None or proto_model.isEmpty():
             self._path_proto_failed = True
             return None
-        return proto
+        # Keep the ghost mesh offset from its root so its visual center matches the camera origin.
+        container = NodePath("path_proto_root")
+        offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
+        proto_model.reparentTo(container)
+        proto_model.setPos(offset_x, offset_y, offset_z)
+        return container
 
     def clear_path_markers(self) -> None:
         """Remove any existing path markers from the scene graph."""

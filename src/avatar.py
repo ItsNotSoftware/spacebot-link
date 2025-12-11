@@ -35,18 +35,24 @@ class Avatar:
             )
 
         base_np.setScale(scale)
-        offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
-        base_np.setPos(Point3(pos[0] + offset_x, pos[1] + offset_y, pos[2] + offset_z))
-        base_np.setHpr(*hpr)
         self._init_hpr: Tuple[float, float, float] = (
             float(hpr[0]),
             float(hpr[1]),
             float(hpr[2]),
         )
 
-        self._back = base_np.copyTo(parent)
-        self._front = base_np.copyTo(parent)
-        base_np.hide()
+        self._back = parent.attachNewNode("avatar_back")
+        self._front = parent.attachNewNode("avatar_front")
+
+        # Keep the mesh offset relative to the camera origin so we don't lose it when we move/rotate the avatar root.
+        offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
+        model_back = base_np.copyTo(self._back)
+        model_back.setPos(Point3(offset_x, offset_y, offset_z))
+        model_front = base_np.copyTo(self._front)
+        model_front.setPos(Point3(offset_x, offset_y, offset_z))
+
+        self.set_pos(*pos)
+        self.set_hpr(*hpr)
 
         for np_ in (self._back, self._front):
             np_.setTransparency(TransparencyAttrib.MDual)
