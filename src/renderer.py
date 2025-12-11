@@ -15,6 +15,7 @@ from panda3d.core import (
     Texture,
     TextureStage,
     Vec4,
+    TransparencyAttrib,
 )
 from direct.showbase.ShowBase import ShowBase
 
@@ -30,6 +31,10 @@ from config import (
     PATH_MODE_DEFAULT,
     PATH_POSE_STRIDE,
     PATH_GHOST_SKIP_START,
+    PATH_PLANE_SIZE,
+    PATH_PLANE_OUTLINE_COLOR,
+    PATH_PLANE_FILL_ALPHA,
+    PATH_PLANE_THICKNESS,
     AVATAR_CAMERA_OFFSET,
 )
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
@@ -49,6 +54,7 @@ class Renderer:
         self._path_markers: List[NodePath] = []
         self._path_proto: Optional[NodePath] = None
         self._path_proto_failed: bool = False
+        self._plane_proto: Optional[NodePath] = None
         self._bg_aspect: float = 0.0
         self._path_line: Optional[NodePath] = None
         self._anim_nps: List[NodePath] = []
@@ -59,7 +65,7 @@ class Renderer:
         self._anim_length: float = 0.0
         self.anim_instances: int = max(1, int(PATH_ANIM_INSTANCES))
         self.anim_line_enabled: bool = bool(PATH_ANIM_LINE_ENABLED)
-        self.path_mode: str = PATH_MODE_DEFAULT  # poses | poses_line | animated
+        self.path_mode: str = PATH_MODE_DEFAULT  # poses | poses_line | planes | animated
         self.pose_stride: int = PATH_POSE_STRIDE
         self.line_stride: int = PATH_LINE_STRIDE
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
@@ -175,6 +181,52 @@ class Renderer:
         np_line.setDepthWrite(False)
         np_line.setDepthTest(False)
         self._path_line = np_line
+
+    def _make_plane_proto(self) -> Optional[NodePath]:
+        """Build an outlined + translucent plane for pose visualization."""
+        w, h = PATH_PLANE_SIZE
+        half_w = 0.5 * max(0.05, float(w))
+        half_h = 0.5 * max(0.05, float(h))
+
+        outline = LineSegs("path_plane_outline")
+        outline.setThickness(PATH_PLANE_THICKNESS)
+        outline.setColor(*PATH_PLANE_OUTLINE_COLOR)
+        outline.moveTo(-half_w, 0.0, -half_h)
+        outline.drawTo(half_w, 0.0, -half_h)
+        outline.drawTo(half_w, 0.0, half_h)
+        outline.drawTo(-half_w, 0.0, half_h)
+        outline.drawTo(-half_w, 0.0, -half_h)
+        outline_node = outline.create()
+        if outline_node is None:
+            return None
+
+        container = NodePath("path_plane_proto")
+        outline_np = container.attachNewNode(outline_node)
+        outline_np.setBin("fixed", 6)
+        outline_np.setDepthWrite(False)
+        outline_np.setDepthTest(False)
+
+        cm = CardMaker("path_plane_fill")
+        cm.setFrame(-half_w, half_w, -half_h, half_h)
+        fill_np = container.attachNewNode(cm.generate())
+        fill_np.setP(-90.0)  # rotate into the XZ plane so normal points forward (+Y)
+        fill_np.setTransparency(TransparencyAttrib.MAlpha)
+        fill_np.setTwoSided(True)
+        fill_np.setColor(
+            PATH_PLANE_OUTLINE_COLOR[0],
+            PATH_PLANE_OUTLINE_COLOR[1],
+            PATH_PLANE_OUTLINE_COLOR[2],
+            PATH_PLANE_FILL_ALPHA,
+        )
+        fill_np.setBin("fixed", 6)
+        fill_np.setDepthWrite(False)
+        fill_np.setDepthTest(False)
+
+        container.setTransparency(TransparencyAttrib.MAlpha)
+        container.setDepthWrite(False)
+        container.setDepthTest(False)
+        container.setBin("fixed", 6)
+        return container
 
     # ---- animated ghost ----
     def _place_anim_at_distance(self, np_node: NodePath, dist: float) -> None:
@@ -414,7 +466,7 @@ class Renderer:
 
     def render_path_markers(self, poses: List[PoseTuple]) -> None:
         """Render path markers from a list of Panda3D (pos, hpr) tuples."""
-        if len(poses) < 3 and self.path_mode in ("poses", "poses_line", "animated"):
+        if len(poses) < 3 and self.path_mode in ("poses", "poses_line", "animated", "planes"):
             self._clear_path_vis()
             return
 
@@ -427,6 +479,32 @@ class Renderer:
             # Keep a thin line for context so the user sees the full intended path.
             if self.anim_line_enabled:
                 self._draw_path_line(poses, color=PATH_LINE_COLOR)
+            return
+
+        if self.path_mode == "planes":
+            self._clear_path_vis()
+            if not poses:
+                return
+            if self._plane_proto is None:
+                self._plane_proto = self._make_plane_proto()
+            proto_plane = self._plane_proto
+            if proto_plane is None:
+                return
+            stride = max(1, int(self.pose_stride))
+            last_idx = len(poses) - 1
+            skip = max(0, int(PATH_GHOST_SKIP_START))
+            for idx, (pos, hpr) in enumerate(poses):
+                if idx not in (0, last_idx) and (idx + stride - 1) % stride != 0:
+                    continue
+                if idx < skip and idx != last_idx:
+                    continue
+                plane = proto_plane.copyTo(self.base.render)
+                plane.setPos(self.base.render, pos[0], pos[1], pos[2])
+                plane.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])
+                t = (idx / float(last_idx)) if last_idx > 0 else 0.0
+                fade = max(0.08, 0.65 * (1.0 - 0.7 * t))
+                plane.setColorScale(1.0, 1.0, 1.0, fade)
+                self._path_markers.append(plane)
             return
 
         self._clear_path_vis()
@@ -471,7 +549,7 @@ class Renderer:
     # ---- path viz configuration ----
     def set_path_mode(self, mode: str) -> None:
         """Update path visualization mode."""
-        if mode not in ("poses", "poses_line", "animated"):
+        if mode not in ("poses", "poses_line", "planes", "animated"):
             return
         self.path_mode = mode
 

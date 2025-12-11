@@ -156,7 +156,7 @@ class UI:
         imgui.spacing()
         imgui.begin_child("PathViz", (0, 220), True)
         imgui.text("Path visualization")
-        modes = ["poses", "poses_line", "animated"]
+        modes = ["poses", "poses_line", "planes", "animated"]
         current_mode = status.get("path_mode", modes[0])
         try:
             idx = modes.index(current_mode)
@@ -166,20 +166,28 @@ class UI:
         if changed_mode:
             status.get("set_path_mode", lambda _m: None)(modes[new_idx])
 
-        if modes[new_idx] == "poses":
+        selected_mode = modes[new_idx]
+        if selected_mode == "poses":
             pose_stride = int(status.get("pose_stride", 4))
             imgui.text("Ghost stride (every Nth pose)")
             imgui.set_next_item_width(140)
             changed, pose_stride = imgui.input_int("##pose_stride", pose_stride)
             if changed:
                 status.get("set_pose_stride", lambda _v: None)(max(1, pose_stride))
-        elif modes[new_idx] == "poses_line":
+        elif selected_mode == "poses_line":
             line_stride = int(status.get("line_stride", 8))
             imgui.text("Ghost stride (every Nth pose)")
             imgui.set_next_item_width(140)
             changed, line_stride = imgui.input_int("##line_stride", line_stride)
             if changed:
                 status.get("set_line_stride", lambda _v: None)(max(1, line_stride))
+        elif selected_mode == "planes":
+            plane_stride = int(status.get("pose_stride", 4))
+            imgui.text("Plane stride (every Nth pose)")
+            imgui.set_next_item_width(140)
+            changed, plane_stride = imgui.input_int("##plane_stride", plane_stride)
+            if changed:
+                status.get("set_pose_stride", lambda _v: None)(max(1, plane_stride))
         else:
             anim_speed = float(status.get("anim_speed", 1.0))
             imgui.text("Anim speed (m/s)")
