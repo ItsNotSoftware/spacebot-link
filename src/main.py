@@ -231,10 +231,14 @@ class SpacebotLinkApp(ShowBase):
             "pose_stride": self.renderer.pose_stride,
             "line_stride": self.renderer.line_stride,
             "anim_speed": self.renderer.anim_speed,
+            "anim_instances": self.renderer.anim_instances,
+            "anim_line_enabled": self.renderer.anim_line_enabled,
             "set_path_mode": self._set_path_mode,
             "set_pose_stride": self._set_pose_stride,
             "set_line_stride": self._set_line_stride,
             "set_anim_speed": self._set_anim_speed,
+            "set_anim_instances": self._set_anim_instances,
+            "set_anim_line_enabled": self._set_anim_line_enabled,
         }
 
     def _set_nav_enabled(self, enabled: bool) -> None:
@@ -311,6 +315,14 @@ class SpacebotLinkApp(ShowBase):
 
     def _set_anim_speed(self, speed: float) -> None:
         self.renderer.set_anim_speed(speed)
+        self._rerender_path()
+
+    def _set_anim_instances(self, count: int) -> None:
+        self.renderer.set_anim_instances(count)
+        self._rerender_path()
+
+    def _set_anim_line_enabled(self, enabled: bool) -> None:
+        self.renderer.set_anim_line_enabled(enabled)
         self._rerender_path()
 
     # ---- cleanup ----

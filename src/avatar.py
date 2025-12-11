@@ -44,12 +44,11 @@ class Avatar:
         self._back = parent.attachNewNode("avatar_back")
         self._front = parent.attachNewNode("avatar_front")
 
-        # Keep the mesh offset relative to the camera origin so we don't lose it when we move/rotate the avatar root.
         offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
         model_back = base_np.copyTo(self._back)
-        model_back.setPos(Point3(offset_x, offset_y, offset_z))
+        model_back.setPos(Point3(0.0, 0.0, 0.0))
         model_front = base_np.copyTo(self._front)
-        model_front.setPos(Point3(offset_x, offset_y, offset_z))
+        model_front.setPos(Point3(0.0, 0.0, 0.0))
 
         self.set_pos(*pos)
         self.set_hpr(*hpr)
