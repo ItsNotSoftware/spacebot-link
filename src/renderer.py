@@ -19,6 +19,14 @@ from panda3d.core import (
 from direct.showbase.ShowBase import ShowBase
 
 from avatar import Avatar
+from config import (
+    PATH_ANIM_SPEED,
+    PATH_LINE_COLOR,
+    PATH_LINE_STRIDE,
+    PATH_LINE_THICKNESS,
+    PATH_MODE_DEFAULT,
+    PATH_POSE_STRIDE,
+)
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
 
 PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -43,10 +51,10 @@ class Renderer:
         self._anim_path: List[PoseTuple] = []
         self._anim_idx: int = 0
         self._anim_t: float = 0.0
-        self.path_mode: str = "poses"  # poses | poses_line | animated
-        self.pose_stride: int = 4
-        self.line_stride: int = 8
-        self.anim_speed: float = 1.0  # units per second
+        self.path_mode: str = PATH_MODE_DEFAULT  # poses | poses_line | animated
+        self.pose_stride: int = PATH_POSE_STRIDE
+        self.line_stride: int = PATH_LINE_STRIDE
+        self.anim_speed: float = PATH_ANIM_SPEED  # units per second
 
         self._init_lights()
         self._make_bg_card(initial_aspect=9 / 16)
@@ -55,6 +63,11 @@ class Renderer:
         if model_path is None:
             raise FileNotFoundError(f"Could not resolve GLTF model: {gltf_model}")
         self.avatar = Avatar(self.base.render, self.base.loader, str(model_path))
+        # Initialize avatar pose to match the current camera pose so the camera sits at the avatar center.
+        cam_pose = self.get_camera_pose()
+        if cam_pose is not None:
+            pos, hpr = cam_pose
+            self.set_avatar_pose(pos, hpr)
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -132,13 +145,13 @@ class Renderer:
         return fallback if fallback.exists() else None
 
     def _draw_path_line(
-        self, poses: List[PoseTuple], color: Tuple[float, float, float, float] = (0.95, 0.80, 0.20, 0.9)
+        self, poses: List[PoseTuple], color: Tuple[float, float, float, float] = PATH_LINE_COLOR
     ) -> None:
         """Draw a line strip through all poses to preserve path continuity."""
         if len(poses) < 2:
             return
         segs = LineSegs("path_line")
-        segs.setThickness(4.0)
+        segs.setThickness(PATH_LINE_THICKNESS)
         segs.setColor(*color)
         first = True
         for pos, _ in poses:
@@ -172,7 +185,16 @@ class Renderer:
         self._anim_np.setBin("fixed", 5)
         self._anim_np.setDepthWrite(False)
         self._anim_path = poses
-        self._anim_idx = 0
+        # Precompute cumulative distances for constant-speed traversal.
+        self._anim_dist: List[float] = [0.0]
+        total = 0.0
+        for i in range(1, len(poses)):
+            (x1, y1, z1), _ = poses[i - 1]
+            (x2, y2, z2), _ = poses[i]
+            d = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
+            total += d
+            self._anim_dist.append(total)
+        self._anim_length = max(1e-6, total)
         self._anim_t = 0.0
         start_pos, start_hpr = poses[0]
         self._anim_np.setPos(self.base.render, *start_pos)
@@ -201,30 +223,37 @@ class Renderer:
             return task.done
         dt = self.base.taskMgr.globalClock.getDt()
         speed = max(0.01, self.anim_speed)
-        # current segment endpoints
-        curr = self._anim_path[self._anim_idx]
-        nxt = self._anim_path[self._anim_idx + 1]
-        (x1, y1, z1), hpr1 = curr
-        (x2, y2, z2), hpr2 = nxt
-        dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
-        seg_len = max(1e-6, (dx * dx + dy * dy + dz * dz) ** 0.5)
-        # advance along segment
-        self._anim_t += (speed * dt) / seg_len
-        if self._anim_t >= 1.0:
-            self._anim_idx += 1
-            if self._anim_idx >= len(self._anim_path) - 1:
-                # Loop back to start for continuous animation.
-                self._anim_idx = 0
-                self._anim_t = 0.0
-                return task.cont
-            self._anim_t = 0.0
-            return task.cont
-        t = self._anim_t
-        # linear interp position and simple HPR lerp
-        pos = (x1 + dx * t, y1 + dy * t, z1 + dz * t)
-        h = hpr1[0] + (hpr2[0] - hpr1[0]) * t
-        p = hpr1[1] + (hpr2[1] - hpr1[1]) * t
-        r = hpr1[2] + (hpr2[2] - hpr1[2]) * t
+        # advance distance along path
+        self._anim_t += speed * dt
+        if self._anim_t > self._anim_length:
+            self._anim_t = self._anim_t % self._anim_length
+
+        # find segment for current distance
+        dist = self._anim_t
+        # binary search over cumulative distances
+        lo, hi = 0, len(self._anim_dist) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._anim_dist[mid] <= dist:
+                lo = mid + 1
+            else:
+                hi = mid
+        idx = max(1, lo)
+        prev_idx = idx - 1
+        d0 = self._anim_dist[prev_idx]
+        d1 = self._anim_dist[idx]
+        seg_span = max(1e-6, d1 - d0)
+        seg_t = (dist - d0) / seg_span
+        (x1, y1, z1), hpr1 = self._anim_path[prev_idx]
+        (x2, y2, z2), hpr2 = self._anim_path[idx]
+        pos = (
+            x1 + (x2 - x1) * seg_t,
+            y1 + (y2 - y1) * seg_t,
+            z1 + (z2 - z1) * seg_t,
+        )
+        h = hpr1[0] + (hpr2[0] - hpr1[0]) * seg_t
+        p = hpr1[1] + (hpr2[1] - hpr1[1]) * seg_t
+        r = hpr1[2] + (hpr2[2] - hpr1[2]) * seg_t
         self._anim_np.setPos(self.base.render, *pos)
         self._anim_np.setHpr(self.base.render, h, p, r)
         return task.cont
