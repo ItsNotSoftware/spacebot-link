@@ -22,6 +22,7 @@ from direct.showbase.ShowBase import ShowBase
 from avatar import Avatar
 from config import (
     CAMERA_UP_OFFSET_M,
+    PATH_GHOST_MODEL,
     PATH_ANIM_INSTANCES,
     PATH_ANIM_LINE_ENABLED,
     PATH_ANIM_SPEED,
@@ -421,7 +422,7 @@ class Renderer:
         """Load prototype model used to render ghost path markers."""
         if self._path_proto_failed:
             return None
-        resolved = self._resolve_asset_path("../assets/path_ghost.glb")
+        resolved = self._resolve_asset_path(PATH_GHOST_MODEL)
         if resolved is None:
             self._path_proto_failed = True
             return None
