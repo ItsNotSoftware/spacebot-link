@@ -14,6 +14,7 @@ default_sensor_endpoint = "tcp://localhost:5556"
 default_image_endpoint = "tcp://localhost:5560"
 default_cmd_endpoint = "tcp://localhost:5557"
 default_gltf_model = "../assets/cobot_ghost.glb"
+PATH_GHOST_MODEL = "../assets/ghost_012.glb"
 
 # ROS topics used by the bridge
 TOPIC_IMAGE = "/main_camera/image"
