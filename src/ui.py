@@ -121,10 +121,16 @@ class UI:
         changed_move, move_robot = imgui.checkbox(
             "Control robot (cmd_vel)", bool(status.get("move_robot", False))
         )
+        imgui.same_line()
+        changed_floor, floor_on = imgui.checkbox(
+            "Floor projection", bool(status.get("floor_projection_enabled", True))
+        )
         if changed_nav:
             status.get("set_nav_enabled", lambda _v: None)(publish_nav)
         if changed_move:
             status.get("set_move_mode", lambda _v: None)(move_robot)
+        if changed_floor:
+            status.get("set_floor_projection_enabled", lambda _v: None)(floor_on)
 
         imgui.spacing()
         imgui.begin_child("Nav", (0, 160), True)
