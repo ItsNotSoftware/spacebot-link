@@ -7,6 +7,7 @@ navigation-friendly helpers.
 from __future__ import annotations
 
 from math import asin, atan, atan2, degrees, pi, sqrt
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from panda3d.core import PerspectiveLens, Quat, Vec3
@@ -15,6 +16,7 @@ __all__ = [
     "apply_opencv_intrinsics_to_lens",
     "ros_orientation_to_panda_hpr",
     "ros_position_to_panda_pos",
+    "ros_vector_to_panda",
     "ros_pose_to_panda_pos_hpr",
     "panda_pose_to_ros",
     "quat_to_rpy_deg",
@@ -23,6 +25,8 @@ __all__ = [
     "is_zero_cmd_vel",
     "parse_ros_path",
     "apply_offset_to_pose",
+    "parse_floor_height",
+    "rotate_vector_by_quaternion",
 ]
 
 PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -119,6 +123,84 @@ def ros_position_to_panda_pos(
     except (TypeError, ValueError):
         return None
     return (-y, x, z)
+
+
+def ros_vector_to_panda(vec: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    """Map a ROS-frame vector into Panda3D coordinates."""
+    x_r, y_r, z_r = vec
+    return (-y_r, x_r, z_r)
+
+
+_FLOOR_RE = re.compile(r"^\s*([+-]?)([xyzXYZ])\s*([0-9]+(?:\.[0-9]+)?)\s*$")
+
+
+def parse_floor_height(
+    payload: Dict[str, Any],
+) -> Optional[Tuple[Tuple[float, float, float], float]]:
+    """Parse floor height payload into a ROS axis vector + distance."""
+    if not isinstance(payload, dict):
+        return None
+
+    axis_vec = None
+    dist = None
+
+    value = payload.get("value")
+    if isinstance(value, str):
+        match = _FLOOR_RE.match(value)
+        if match:
+            sign_str, axis_char, dist_str = match.groups()
+            try:
+                dist = float(dist_str)
+            except (TypeError, ValueError):
+                dist = None
+            sign = -1.0 if sign_str == "-" else 1.0
+            axis_char = axis_char.lower()
+            if axis_char == "x":
+                axis_vec = (sign, 0.0, 0.0)
+            elif axis_char == "y":
+                axis_vec = (0.0, sign, 0.0)
+            elif axis_char == "z":
+                axis_vec = (0.0, 0.0, sign)
+
+    if axis_vec is None:
+        axis = payload.get("axis")
+        distance = payload.get("distance")
+        if isinstance(axis, (list, tuple)) and len(axis) == 3:
+            try:
+                axis_vec = (float(axis[0]), float(axis[1]), float(axis[2]))
+            except (TypeError, ValueError):
+                axis_vec = None
+        if isinstance(distance, (int, float, str)):
+            try:
+                dist = float(distance)
+            except (TypeError, ValueError):
+                dist = None
+
+    if axis_vec is None or dist is None or dist < 0.0:
+        return None
+
+    return axis_vec, dist
+
+
+def rotate_vector_by_quaternion(
+    vec: Tuple[float, float, float],
+    quat: Dict[str, float],
+) -> Tuple[float, float, float]:
+    """Rotate a ROS vector by a ROS quaternion (x,y,z,w)."""
+    vx, vy, vz = vec
+    qx = float(quat.get("x", 0.0))
+    qy = float(quat.get("y", 0.0))
+    qz = float(quat.get("z", 0.0))
+    qw = float(quat.get("w", 1.0))
+
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+
+    rx = vx + qw * tx + (qy * tz - qz * ty)
+    ry = vy + qw * ty + (qz * tx - qx * tz)
+    rz = vz + qw * tz + (qx * ty - qy * tx)
+    return (rx, ry, rz)
 
 
 def ros_pose_to_panda_pos_hpr(

@@ -25,6 +25,7 @@ TOPIC_CMD_VEL = "/space_cobot/cmd_vel"
 TOPIC_GOAL = "/nav6d/goal"
 TOPIC_PATH = "/nav6d/planner/path"
 TOPIC_CMD_PATH = "/nav6d/planner/path"
+TOPIC_FLOOR_HEIGHT = "/floor_height"
 
 # Speeds and thresholds
 MOVE_SPEED = 0.8
@@ -48,6 +49,12 @@ PATH_PLANE_SIZE = (1.1, 0.7)  # (width, height) of pose planes in meters
 PATH_PLANE_OUTLINE_COLOR = (0.05, 0.95, 1.0, 1.0)
 PATH_PLANE_FILL_ALPHA = 0.035
 PATH_PLANE_THICKNESS = 5.5
+
+# Floor height visualization
+FLOOR_SHADOW_SIZE = 0.6
+FLOOR_SHADOW_COLOR = (0.0, 0.0, 0.0, 0.22)
+FLOOR_LINE_COLOR = (0.05, 0.95, 1.0, 0.85)
+FLOOR_LINE_THICKNESS = 3.0
 
 # Avatar offsets (center camera within the mesh)
 CAMERA_FORWARD_OFFSET_M = 0.10

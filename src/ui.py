@@ -237,6 +237,9 @@ class UI:
         if pos_err is not None:
             imgui.spacing()
             imgui.text(f"Avatar-robot position error: {pos_err:.3f} m")
+        floor_height = status.get("floor_height")
+        if floor_height is not None:
+            imgui.text(f"Floor height: {floor_height}")
 
         imgui.end()
 
