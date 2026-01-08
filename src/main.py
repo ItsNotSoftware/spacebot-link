@@ -86,6 +86,7 @@ class SpacebotLinkApp(ShowBase):
         self._robot_stopped_last: bool = False
         self._last_path_poses: List = []
         self._last_floor_height: Optional[str] = None
+        self._floor_projection_enabled: bool = True
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -198,9 +199,12 @@ class SpacebotLinkApp(ShowBase):
                     self._last_floor_height = None
                     return Task.cont
                 axis_panda = ros_vector_to_panda(axis_unit)
-                self.renderer.update_floor_indicator(
-                    avatar_pos_panda, shadow_pos_panda, axis_panda
-                )
+                if self._floor_projection_enabled:
+                    self.renderer.update_floor_indicator(
+                        avatar_pos_panda, shadow_pos_panda, axis_panda
+                    )
+                else:
+                    self.renderer.clear_floor_indicator()
                 self._last_floor_height = floor_payload.get("value")
             else:
                 self.renderer.clear_floor_indicator()
@@ -312,6 +316,8 @@ class SpacebotLinkApp(ShowBase):
             "robot_ros_pose": robot_ros,
             "avatar_robot_error": pos_err,
             "floor_height": self._last_floor_height,
+            "floor_projection_enabled": self._floor_projection_enabled,
+            "set_floor_projection_enabled": self._set_floor_projection_enabled,
             "set_nav_enabled": self._set_nav_enabled,
             "set_move_mode": self.input.set_move_mode,
             "activate_follow": self._activate_follow_mode,
@@ -334,6 +340,12 @@ class SpacebotLinkApp(ShowBase):
     def _set_nav_enabled(self, enabled: bool) -> None:
         """Toggle publishing of goals/paths."""
         self.nav.state.nav_publishing_enabled = bool(enabled)
+
+    def _set_floor_projection_enabled(self, enabled: bool) -> None:
+        """Toggle floor projection rendering."""
+        self._floor_projection_enabled = bool(enabled)
+        if not self._floor_projection_enabled:
+            self.renderer.clear_floor_indicator()
 
     def _activate_goal_mode(self) -> None:
         """Switch to goal mode and seed last goal pose."""

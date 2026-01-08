@@ -143,21 +143,46 @@ class Renderer:
             self._floor_shadow.hide()
 
     def _make_floor_shadow(self) -> Optional[NodePath]:
-        """Create a translucent quad used as a floor shadow marker."""
+        """Create a donut-style floor shadow marker (two concentric circles)."""
         size = max(0.05, float(FLOOR_SHADOW_SIZE))
-        cm = CardMaker("floor_shadow")
-        cm.setFrame(-0.5 * size, 0.5 * size, -0.5 * size, 0.5 * size)
-        node = cm.generate()
-        if node is None:
+        outer_r = 0.5 * size
+        inner_r = max(0.02, 0.55 * outer_r)
+        segments = 64
+
+        def _make_ring(radius: float, name: str) -> Optional[NodePath]:
+            segs = LineSegs(name)
+            segs.setThickness(4.0)
+            segs.setColor(*FLOOR_SHADOW_COLOR)
+            first = True
+            for i in range(segments + 1):
+                t = (2.0 * 3.14159265) * (i / segments)
+                x = radius * float(cos(t))
+                z = radius * float(sin(t))
+                if first:
+                    segs.moveTo(x, 0.0, z)
+                    first = False
+                else:
+                    segs.drawTo(x, 0.0, z)
+            node = segs.create()
+            if node is None:
+                return None
+            return NodePath(node)
+
+        from math import cos, sin
+
+        container = NodePath("floor_shadow")
+        outer = _make_ring(outer_r, "floor_shadow_outer")
+        inner = _make_ring(inner_r, "floor_shadow_inner")
+        if outer is None or inner is None:
             return None
-        np_shadow = self.base.render.attachNewNode(node)
-        np_shadow.setP(-90.0)  # rotate into XZ plane so normal points +Y
-        np_shadow.setTransparency(TransparencyAttrib.MAlpha)
-        np_shadow.setColor(*FLOOR_SHADOW_COLOR)
-        np_shadow.setBin("fixed", 8)
-        np_shadow.setDepthWrite(False)
-        np_shadow.setDepthTest(False)
-        return np_shadow
+        outer.reparentTo(container)
+        inner.reparentTo(container)
+        container.reparentTo(self.base.render)
+        container.setTransparency(TransparencyAttrib.MAlpha)
+        container.setBin("fixed", 8)
+        container.setDepthWrite(False)
+        container.setDepthTest(False)
+        return container
 
     def _update_bg_scale(self) -> None:
         """Compute card scale so it fills the current camera frustum."""
