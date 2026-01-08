@@ -36,7 +36,7 @@ FOLLOW_REACHED_THRESH = 0.2
 FOLLOW_SAMPLE_PERIOD = 0.2
 
 # Path visualization defaults
-PATH_MODE_DEFAULT = "poses"  # poses | poses_line | animated | planes
+PATH_MODE_DEFAULT = "animated"  # poses | poses_line | animated | planes
 PATH_POSE_STRIDE = 4
 PATH_LINE_STRIDE = 8
 PATH_ANIM_SPEED = 2.5  # m/s
