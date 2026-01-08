@@ -14,6 +14,7 @@ from panda3d.core import (
     NodePath,
     Texture,
     TextureStage,
+    Vec3,
     Vec4,
     TransparencyAttrib,
 )
@@ -37,6 +38,10 @@ from config import (
     PATH_PLANE_FILL_ALPHA,
     PATH_PLANE_THICKNESS,
     AVATAR_CAMERA_OFFSET,
+    FLOOR_SHADOW_SIZE,
+    FLOOR_SHADOW_COLOR,
+    FLOOR_LINE_COLOR,
+    FLOOR_LINE_THICKNESS,
 )
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
 
@@ -79,6 +84,9 @@ class Renderer:
             raise FileNotFoundError(f"Could not resolve GLTF model: {gltf_model}")
         self.avatar = Avatar(self.base.render, self.base.loader, str(model_path))
         self.set_avatar_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        self._floor_shadow: Optional[NodePath] = None
+        self._floor_line: Optional[NodePath] = None
+        self._init_floor_indicator()
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -127,6 +135,29 @@ class Renderer:
         self.bg_card.setTexScale(ts, 1, -1)
         self.bg_card.setTexOffset(ts, 0, 1)
         self._update_bg_scale()
+
+    def _init_floor_indicator(self) -> None:
+        """Initialize the floor height shadow and line."""
+        self._floor_shadow = self._make_floor_shadow()
+        if self._floor_shadow is not None:
+            self._floor_shadow.hide()
+
+    def _make_floor_shadow(self) -> Optional[NodePath]:
+        """Create a translucent quad used as a floor shadow marker."""
+        size = max(0.05, float(FLOOR_SHADOW_SIZE))
+        cm = CardMaker("floor_shadow")
+        cm.setFrame(-0.5 * size, 0.5 * size, -0.5 * size, 0.5 * size)
+        node = cm.generate()
+        if node is None:
+            return None
+        np_shadow = self.base.render.attachNewNode(node)
+        np_shadow.setP(-90.0)  # rotate into XZ plane so normal points +Y
+        np_shadow.setTransparency(TransparencyAttrib.MAlpha)
+        np_shadow.setColor(*FLOOR_SHADOW_COLOR)
+        np_shadow.setBin("fixed", 8)
+        np_shadow.setDepthWrite(False)
+        np_shadow.setDepthTest(False)
+        return np_shadow
 
     def _update_bg_scale(self) -> None:
         """Compute card scale so it fills the current camera frustum."""
@@ -377,6 +408,62 @@ class Renderer:
     def add_avatar_hpr(self, dh: float, dp: float, dr: float) -> None:
         """Increment avatar orientation in its local frame."""
         self.avatar.add_hpr(dh, dp, dr)
+
+    def update_floor_indicator(
+        self,
+        avatar_pos: Tuple[float, float, float],
+        floor_pos: Tuple[float, float, float],
+        axis: Tuple[float, float, float],
+    ) -> None:
+        """Update floor shadow + line using avatar position and floor cast."""
+        if self._floor_shadow is None:
+            return
+        ax, ay, az = axis
+        axis_len = (ax * ax + ay * ay + az * az) ** 0.5
+        if axis_len < 1e-6:
+            self.clear_floor_indicator()
+            return
+        ax /= axis_len
+        ay /= axis_len
+        az /= axis_len
+
+        fx, fy, fz = floor_pos
+        self._floor_shadow.setPos(fx, fy, fz)
+        self._floor_shadow.lookAt(
+            self._floor_shadow.getPos() + Vec3(ax, ay, az)
+        )
+        self._floor_shadow.show()
+
+        if self._floor_line is not None:
+            try:
+                self._floor_line.removeNode()
+            except Exception:
+                pass
+            self._floor_line = None
+
+        segs = LineSegs("floor_line")
+        segs.setThickness(FLOOR_LINE_THICKNESS)
+        segs.setColor(*FLOOR_LINE_COLOR)
+        segs.moveTo(avatar_pos[0], avatar_pos[1], avatar_pos[2])
+        segs.drawTo(fx, fy, fz)
+        node = segs.create()
+        if node is None:
+            return
+        self._floor_line = self.base.render.attachNewNode(node)
+        self._floor_line.setBin("fixed", 9)
+        self._floor_line.setDepthWrite(False)
+        self._floor_line.setDepthTest(False)
+
+    def clear_floor_indicator(self) -> None:
+        """Hide floor shadow + line when no valid reading exists."""
+        if self._floor_shadow is not None:
+            self._floor_shadow.hide()
+        if self._floor_line is not None:
+            try:
+                self._floor_line.removeNode()
+            except Exception:
+                pass
+            self._floor_line = None
 
     # ---- camera helpers ----
     def set_camera_pose(

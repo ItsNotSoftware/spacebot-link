@@ -19,6 +19,7 @@ from config import (
     TOPIC_IMAGE,
     TOPIC_PATH,
     TOPIC_POSE,
+    TOPIC_FLOOR_HEIGHT,
     default_cmd_endpoint,
     default_gltf_model,
     default_image_endpoint,
@@ -29,7 +30,11 @@ from utils import (
     is_zero_cmd_vel,
     panda_pose_to_ros_tuple,
     parse_ros_path,
+    ros_position_to_panda_pos,
     ros_pose_to_panda_pos_hpr,
+    ros_vector_to_panda,
+    rotate_vector_by_quaternion,
+    parse_floor_height,
 )
 from input_controller import InputController
 from navigation import Navigation
@@ -80,6 +85,7 @@ class SpacebotLinkApp(ShowBase):
         self._avg_fps: float = 0.0
         self._robot_stopped_last: bool = False
         self._last_path_poses: List = []
+        self._last_floor_height: Optional[str] = None
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -134,6 +140,74 @@ class SpacebotLinkApp(ShowBase):
             )
             self.renderer.set_camera_pose(pos, hpr)
         self._maybe_sync_avatar_on_stop()
+
+        floor_payload = self.bus_sensors.get(TOPIC_FLOOR_HEIGHT)
+        if isinstance(floor_payload, dict):
+            parsed = parse_floor_height(floor_payload)
+            if parsed is not None:
+                axis_ros, distance = parsed
+                robot_ori = self.nav.state.last_ros_orientation
+                avatar_ros = panda_pose_to_ros_tuple(self.renderer.get_avatar_pose())
+                if avatar_ros is None:
+                    self.renderer.clear_floor_indicator()
+                    self._last_floor_height = None
+                    return Task.cont
+                avatar_pos_ros, _ = avatar_ros
+                axis_world_ros = (
+                    rotate_vector_by_quaternion(axis_ros, robot_ori)
+                    if robot_ori is not None
+                    else axis_ros
+                )
+                axis_len = (
+                    axis_world_ros[0] ** 2
+                    + axis_world_ros[1] ** 2
+                    + axis_world_ros[2] ** 2
+                ) ** 0.5
+                if axis_len < 1e-6:
+                    self.renderer.clear_floor_indicator()
+                    self._last_floor_height = None
+                    return Task.cont
+                axis_unit = (
+                    axis_world_ros[0] / axis_len,
+                    axis_world_ros[1] / axis_len,
+                    axis_world_ros[2] / axis_len,
+                )
+                plane_point_ros = (
+                    axis_unit[0] * distance,
+                    axis_unit[1] * distance,
+                    axis_unit[2] * distance,
+                )
+                dist_to_plane = (
+                    (plane_point_ros[0] - avatar_pos_ros[0]) * axis_unit[0]
+                    + (plane_point_ros[1] - avatar_pos_ros[1]) * axis_unit[1]
+                    + (plane_point_ros[2] - avatar_pos_ros[2]) * axis_unit[2]
+                )
+                shadow_pos_ros = (
+                    avatar_pos_ros[0] + axis_unit[0] * dist_to_plane,
+                    avatar_pos_ros[1] + axis_unit[1] * dist_to_plane,
+                    avatar_pos_ros[2] + axis_unit[2] * dist_to_plane,
+                )
+                avatar_pos_panda = ros_position_to_panda_pos(
+                    {"x": avatar_pos_ros[0], "y": avatar_pos_ros[1], "z": avatar_pos_ros[2]}
+                )
+                shadow_pos_panda = ros_position_to_panda_pos(
+                    {"x": shadow_pos_ros[0], "y": shadow_pos_ros[1], "z": shadow_pos_ros[2]}
+                )
+                if avatar_pos_panda is None or shadow_pos_panda is None:
+                    self.renderer.clear_floor_indicator()
+                    self._last_floor_height = None
+                    return Task.cont
+                axis_panda = ros_vector_to_panda(axis_unit)
+                self.renderer.update_floor_indicator(
+                    avatar_pos_panda, shadow_pos_panda, axis_panda
+                )
+                self._last_floor_height = floor_payload.get("value")
+            else:
+                self.renderer.clear_floor_indicator()
+                self._last_floor_height = None
+        else:
+            self.renderer.clear_floor_indicator()
+            self._last_floor_height = None
         return Task.cont
 
     def _keyboard_task(self, task: PythonTask) -> int:
@@ -237,6 +311,7 @@ class SpacebotLinkApp(ShowBase):
             "avatar_ros_pose": avatar_ros,
             "robot_ros_pose": robot_ros,
             "avatar_robot_error": pos_err,
+            "floor_height": self._last_floor_height,
             "set_nav_enabled": self._set_nav_enabled,
             "set_move_mode": self.input.set_move_mode,
             "activate_follow": self._activate_follow_mode,
