@@ -38,8 +38,14 @@ from config import (
     PATH_PLANE_FILL_ALPHA,
     PATH_PLANE_THICKNESS,
     AVATAR_CAMERA_OFFSET,
-    FLOOR_SHADOW_SIZE,
+    FLOOR_SHADOW_BASE_RADIUS,
+    FLOOR_SHADOW_INNER_RATIO,
+    FLOOR_SHADOW_MIN_SCALE,
+    FLOOR_SHADOW_MAX_SCALE,
+    FLOOR_SHADOW_NEAR_DIST,
+    FLOOR_SHADOW_FAR_DIST,
     FLOOR_SHADOW_COLOR,
+    FLOOR_SHADOW_THICKNESS,
     FLOOR_LINE_COLOR,
     FLOOR_LINE_THICKNESS,
 )
@@ -144,14 +150,13 @@ class Renderer:
 
     def _make_floor_shadow(self) -> Optional[NodePath]:
         """Create a donut-style floor shadow marker (two concentric circles)."""
-        size = max(0.05, float(FLOOR_SHADOW_SIZE))
-        outer_r = 0.5 * size
-        inner_r = max(0.02, 0.55 * outer_r)
+        outer_r = max(0.05, float(FLOOR_SHADOW_BASE_RADIUS))
+        inner_r = max(0.02, float(FLOOR_SHADOW_INNER_RATIO) * outer_r)
         segments = 64
 
         def _make_ring(radius: float, name: str) -> Optional[NodePath]:
             segs = LineSegs(name)
-            segs.setThickness(4.0)
+            segs.setThickness(FLOOR_SHADOW_THICKNESS)
             segs.setColor(*FLOOR_SHADOW_COLOR)
             first = True
             for i in range(segments + 1):
@@ -439,6 +444,7 @@ class Renderer:
         avatar_pos: Tuple[float, float, float],
         floor_pos: Tuple[float, float, float],
         axis: Tuple[float, float, float],
+        distance_to_robot: float,
     ) -> None:
         """Update floor shadow + line using avatar position and floor cast."""
         if self._floor_shadow is None:
@@ -457,6 +463,17 @@ class Renderer:
         self._floor_shadow.lookAt(
             self._floor_shadow.getPos() + Vec3(ax, ay, az)
         )
+        if FLOOR_SHADOW_FAR_DIST <= FLOOR_SHADOW_NEAR_DIST:
+            scale = 1.0
+        else:
+            t = (distance_to_robot - FLOOR_SHADOW_NEAR_DIST) / (
+                FLOOR_SHADOW_FAR_DIST - FLOOR_SHADOW_NEAR_DIST
+            )
+            t = max(0.0, min(1.0, t))
+            scale = FLOOR_SHADOW_MAX_SCALE + t * (
+                FLOOR_SHADOW_MIN_SCALE - FLOOR_SHADOW_MAX_SCALE
+            )
+        self._floor_shadow.setScale(scale)
         self._floor_shadow.show()
 
         if self._floor_line is not None:
