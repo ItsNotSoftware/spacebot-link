@@ -24,6 +24,7 @@ from config import (
     default_gltf_model,
     default_image_endpoint,
     default_sensor_endpoint,
+    FLOOR_PROJECTION_ENABLED,
 )
 from utils import (
     extract_ros_pose,
@@ -86,7 +87,7 @@ class SpacebotLinkApp(ShowBase):
         self._robot_stopped_last: bool = False
         self._last_path_poses: List = []
         self._last_floor_height: Optional[str] = None
-        self._floor_projection_enabled: bool = True
+        self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -200,8 +201,18 @@ class SpacebotLinkApp(ShowBase):
                     return Task.cont
                 axis_panda = ros_vector_to_panda(axis_unit)
                 if self._floor_projection_enabled:
+                    robot_pose_panda = self.nav.state.last_robot_pose_panda
+                    if robot_pose_panda is None:
+                        self.renderer.clear_floor_indicator()
+                        self._last_floor_height = None
+                        return Task.cont
+                    (rx, ry, rz), _ = robot_pose_panda
+                    dx = avatar_pos_panda[0] - rx
+                    dy = avatar_pos_panda[1] - ry
+                    dz = avatar_pos_panda[2] - rz
+                    dist_to_robot = (dx * dx + dy * dy + dz * dz) ** 0.5
                     self.renderer.update_floor_indicator(
-                        avatar_pos_panda, shadow_pos_panda, axis_panda
+                        avatar_pos_panda, shadow_pos_panda, axis_panda, dist_to_robot
                     )
                 else:
                     self.renderer.clear_floor_indicator()
