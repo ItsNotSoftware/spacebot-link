@@ -12,6 +12,7 @@ from panda3d.core import (
     DirectionalLight,
     LineSegs,
     NodePath,
+    Quat,
     Texture,
     TextureStage,
     Vec3,
@@ -48,6 +49,12 @@ from config import (
     FLOOR_SHADOW_THICKNESS,
     FLOOR_LINE_COLOR,
     FLOOR_LINE_THICKNESS,
+    CAMERA_WIDTH_PX,
+    CAMERA_HEIGHT_PX,
+    CAMERA_FX,
+    CAMERA_FY,
+    CAMERA_CX,
+    CAMERA_CY,
 )
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
 
@@ -112,10 +119,15 @@ class Renderer:
 
     def _init_default_lens(self) -> None:
         """Seed a reasonable default lens configuration until camera info arrives."""
-        w, h = 1280, 720
-        fx = fy = 900.0
-        cx, cy = w / 2, h / 2
-        apply_opencv_intrinsics_to_lens(self.base.camLens, w, h, fx, fy, cx, cy)
+        apply_opencv_intrinsics_to_lens(
+            self.base.camLens,
+            CAMERA_WIDTH_PX,
+            CAMERA_HEIGHT_PX,
+            CAMERA_FX,
+            CAMERA_FY,
+            CAMERA_CX,
+            CAMERA_CY,
+        )
         self.base.camLens.setNear(0.1)  # type: ignore
         self.base.camLens.setFar(5000.0)  # type: ignore
         self._update_bg_scale()
@@ -431,6 +443,10 @@ class Renderer:
         hpr = self.base.camera.getHpr(self.base.render)
         self.avatar.set_hpr(float(hpr[0]), float(hpr[1]), float(hpr[2]))
 
+    def set_avatar_visible(self, visible: bool) -> None:
+        """Toggle avatar visibility in the scene."""
+        self.avatar.set_visible(visible)
+
     def move_avatar(self, dx: float, dy: float, dz: float) -> None:
         """Translate avatar in world space by the given deltas."""
         self.avatar.move_world(dx, dy, dz)
@@ -515,9 +531,13 @@ class Renderer:
         if self.base.camera is None:
             return
         offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
-        cx = pos[0] + offset_x
-        cy = pos[1] + offset_y
-        cz = pos[2] + offset_z
+        offset = Vec3(offset_x, offset_y, offset_z)
+        rot = Quat()
+        rot.setHpr(Vec3(hpr[0], hpr[1], hpr[2]))
+        offset_world = rot.xform(offset)
+        cx = pos[0] + offset_world[0]
+        cy = pos[1] + offset_world[1]
+        cz = pos[2] + offset_world[2]
         self.base.camera.setPos(self.base.render, cx, cy, cz)
         self.base.camera.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])
 
@@ -528,10 +548,14 @@ class Renderer:
         pos_v = self.base.camera.getPos(self.base.render)
         hpr_v = self.base.camera.getHpr(self.base.render)
         offset_x, offset_y, offset_z = AVATAR_CAMERA_OFFSET
+        offset = Vec3(offset_x, offset_y, offset_z)
+        rot = Quat()
+        rot.setHpr(hpr_v)
+        offset_world = rot.xform(offset)
         pos = (
-            float(pos_v[0] - offset_x),
-            float(pos_v[1] - offset_y),
-            float(pos_v[2] - offset_z),
+            float(pos_v[0] - offset_world[0]),
+            float(pos_v[1] - offset_world[1]),
+            float(pos_v[2] - offset_world[2]),
         )
         hpr = (float(hpr_v[0]), float(hpr_v[1]), float(hpr_v[2]))
         return pos, hpr
