@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Dict, Optional, Sequence, List
+from typing import Any, Dict, Optional, Sequence, List, Tuple
 
 from panda3d.core import loadPrcFileData, PythonTask
 from direct.showbase.ShowBase import ShowBase
@@ -27,6 +27,7 @@ from config import (
     FLOOR_PROJECTION_ENABLED,
     AVATAR_AUTO_RESET_DISTANCE,
     AVATAR_AUTO_RESET_DELAY_S,
+    AVATAR_HIDE_DISTANCE,
 )
 from utils import (
     extract_ros_pose,
@@ -149,6 +150,7 @@ class SpacebotLinkApp(ShowBase):
             if not self._avatar_spawned_from_pose:
                 self.renderer.sync_avatar_to_robot(parsed_pos_hpr)
                 self._avatar_spawned_from_pose = True
+            self._update_avatar_visibility(parsed_pos_hpr)
         self._maybe_sync_avatar_on_stop()
 
         floor_payload = self.bus_sensors.get(TOPIC_FLOOR_HEIGHT)
@@ -462,6 +464,20 @@ class SpacebotLinkApp(ShowBase):
             self._avatar_auto_reset_done = True
             self._avatar_auto_reset_pending_since = None
         self._robot_stopped_last = True
+
+    def _update_avatar_visibility(self, robot_pose: Tuple) -> None:
+        """Hide avatar when it's very close to the robot pose."""
+        if self.input.is_robot_mode():
+            return
+        if robot_pose is None:
+            return
+        avatar_pos, _ = self.renderer.get_avatar_pose()
+        (rx, ry, rz), _ = robot_pose
+        dx = avatar_pos[0] - rx
+        dy = avatar_pos[1] - ry
+        dz = avatar_pos[2] - rz
+        dist = (dx * dx + dy * dy + dz * dz) ** 0.5
+        self.renderer.set_avatar_visible(dist > AVATAR_HIDE_DISTANCE)
 
     def _rerender_path(self) -> None:
         """Force a re-render of the current path with latest viz settings."""
