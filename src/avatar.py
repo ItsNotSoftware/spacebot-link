@@ -94,6 +94,15 @@ class Avatar:
         """Restore avatar orientation to initial HPR."""
         self.set_hpr(*self._init_hpr)
 
+    def set_visible(self, visible: bool) -> None:
+        """Show or hide the avatar geometry."""
+        if visible:
+            self._back.show()
+            self._front.show()
+        else:
+            self._back.hide()
+            self._front.hide()
+
     def set_scale(self, s: float) -> None:
         """Uniformly scale avatar geometry."""
         self._back.setScale(s)

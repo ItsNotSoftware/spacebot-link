@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from panda3d.core import ClockObject, Vec3
-from typing import Any
+from typing import Any, Optional
 
 from config import (
     BACKWARD_BUTTON,
@@ -36,6 +36,7 @@ class InputController:
         self.nav = nav
         self.cmd_pub = cmd_pub
         self._move_robot = False
+        self._nav_publish_before_robot_mode: Optional[bool] = None
 
     def set_move_mode(self, move_robot: bool) -> None:
         """Toggle control target between avatar and robot."""
@@ -45,6 +46,18 @@ class InputController:
         self._move_robot = move_robot
         target = "Robot" if self._move_robot else "Avatar"
         self.nav.set_move_target(target)
+        if self._move_robot:
+            if self._nav_publish_before_robot_mode is None:
+                self._nav_publish_before_robot_mode = bool(
+                    self.nav.state.nav_publishing_enabled
+                )
+            self.nav.state.nav_publishing_enabled = False
+            self.renderer.set_avatar_visible(False)
+        else:
+            if self._nav_publish_before_robot_mode is not None:
+                self.nav.state.nav_publishing_enabled = self._nav_publish_before_robot_mode
+            self._nav_publish_before_robot_mode = None
+            self.renderer.set_avatar_visible(True)
         if not self._move_robot:
             self._publish_cmd_vel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -55,6 +68,40 @@ class InputController:
     def is_robot_mode(self) -> bool:
         """Return True when controlling the robot (cmd_vel)."""
         return self._move_robot
+
+    def set_nav_publish_preference(self, enabled: bool) -> None:
+        """Apply nav publishing preference, deferring while in robot mode."""
+        enabled = bool(enabled)
+        if self._move_robot:
+            self._nav_publish_before_robot_mode = enabled
+            self.nav.state.nav_publishing_enabled = False
+        else:
+            self.nav.state.nav_publishing_enabled = enabled
+
+    def is_any_input_active(self) -> bool:
+        """Return True when any movement/orientation key is pressed."""
+        mw = self.base.mouseWatcherNode
+        if not mw:
+            return False
+        buttons = (
+            FORWARD_BUTTON,
+            BACKWARD_BUTTON,
+            LEFT_BUTTON,
+            RIGHT_BUTTON,
+            UP_BUTTON,
+            UP_BUTTON_ALT,
+            DOWN_BUTTON,
+            DOWN_BUTTON_ALT,
+            YAW_LEFT_BUTTON,
+            YAW_RIGHT_BUTTON,
+            PITCH_UP_BUTTON,
+            PITCH_DOWN_BUTTON,
+            ROLL_LEFT_BUTTON,
+            ROLL_RIGHT_BUTTON,
+            RESET_ORIENT_BUTTON,
+            RESET_TO_ROBOT_ORIENT_BUTTON,
+        )
+        return any(mw.is_button_down(btn) for btn in buttons)
 
     def poll(self) -> None:
         """Process keyboard state each frame."""

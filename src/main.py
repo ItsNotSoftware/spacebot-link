@@ -25,6 +25,8 @@ from config import (
     default_image_endpoint,
     default_sensor_endpoint,
     FLOOR_PROJECTION_ENABLED,
+    AVATAR_AUTO_RESET_DISTANCE,
+    AVATAR_AUTO_RESET_DELAY_S,
 )
 from utils import (
     extract_ros_pose,
@@ -85,6 +87,9 @@ class SpacebotLinkApp(ShowBase):
         self._fps_samples = deque(maxlen=120)
         self._avg_fps: float = 0.0
         self._robot_stopped_last: bool = False
+        self._avatar_auto_reset_pending_since: Optional[float] = None
+        self._avatar_auto_reset_done: bool = False
+        self._avatar_spawned_from_pose: bool = False
         self._last_path_poses: List = []
         self._last_floor_height: Optional[str] = None
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
@@ -141,6 +146,9 @@ class SpacebotLinkApp(ShowBase):
                 parsed_pos_hpr, self.nav.state.last_ros_pose, ori
             )
             self.renderer.set_camera_pose(pos, hpr)
+            if not self._avatar_spawned_from_pose:
+                self.renderer.sync_avatar_to_robot(parsed_pos_hpr)
+                self._avatar_spawned_from_pose = True
         self._maybe_sync_avatar_on_stop()
 
         floor_payload = self.bus_sensors.get(TOPIC_FLOOR_HEIGHT)
@@ -248,6 +256,8 @@ class SpacebotLinkApp(ShowBase):
             return Task.cont
         if not self.nav.state.nav_publishing_enabled:
             return Task.cont
+        if self.input.is_robot_mode():
+            return Task.cont
 
         pose = self.renderer.get_avatar_pose()
         if not self.nav.pose_changed_since_last_goal(pose):
@@ -257,6 +267,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _follow_mode_tick(self, task: PythonTask) -> int:
         """Sample avatar pose and publish follow path while in Follow Mode."""
+        if self.input.is_robot_mode():
+            task.delayTime = self.nav.follow_sample_period
+            return Task.again
         self.nav.follow_tick(self.renderer)
         task.delayTime = self.nav.follow_sample_period
         return Task.again
@@ -350,7 +363,7 @@ class SpacebotLinkApp(ShowBase):
 
     def _set_nav_enabled(self, enabled: bool) -> None:
         """Toggle publishing of goals/paths."""
-        self.nav.state.nav_publishing_enabled = bool(enabled)
+        self.input.set_nav_publish_preference(enabled)
 
     def _set_floor_projection_enabled(self, enabled: bool) -> None:
         """Toggle floor projection rendering."""
@@ -401,10 +414,54 @@ class SpacebotLinkApp(ShowBase):
         """Teleport avatar to robot pose when incoming cmd_vel hits zero."""
         payload = self.bus_sensors.get(TOPIC_CMD_VEL)
         is_zero = is_zero_cmd_vel(payload)
-        if is_zero and not self._robot_stopped_last:
-            if self.nav.state.last_robot_pose_panda is not None:
-                self.renderer.sync_avatar_to_robot(self.nav.state.last_robot_pose_panda)
-        self._robot_stopped_last = is_zero
+        if self.input.is_robot_mode():
+            self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_done = False
+            self._robot_stopped_last = is_zero
+            return
+
+        if not is_zero:
+            self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_done = False
+            self._robot_stopped_last = False
+            return
+
+        if self._avatar_auto_reset_done:
+            self._robot_stopped_last = True
+            return
+
+        if self.nav.state.last_robot_pose_panda is None:
+            self._avatar_auto_reset_pending_since = None
+            self._robot_stopped_last = True
+            return
+
+        if self.input.is_any_input_active():
+            self._avatar_auto_reset_pending_since = None
+            self._robot_stopped_last = True
+            return
+
+        avatar_pos, _ = self.renderer.get_avatar_pose()
+        (rx, ry, rz), _ = self.nav.state.last_robot_pose_panda
+        dx = avatar_pos[0] - rx
+        dy = avatar_pos[1] - ry
+        dz = avatar_pos[2] - rz
+        dist = (dx * dx + dy * dy + dz * dz) ** 0.5
+        if dist > AVATAR_AUTO_RESET_DISTANCE:
+            self._avatar_auto_reset_pending_since = None
+            self._robot_stopped_last = True
+            return
+
+        now = self.taskMgr.globalClock.getFrameTime()
+        if self._avatar_auto_reset_pending_since is None:
+            self._avatar_auto_reset_pending_since = now
+            self._robot_stopped_last = True
+            return
+
+        if (now - self._avatar_auto_reset_pending_since) >= AVATAR_AUTO_RESET_DELAY_S:
+            self.renderer.sync_avatar_to_robot(self.nav.state.last_robot_pose_panda)
+            self._avatar_auto_reset_done = True
+            self._avatar_auto_reset_pending_since = None
+        self._robot_stopped_last = True
 
     def _rerender_path(self) -> None:
         """Force a re-render of the current path with latest viz settings."""

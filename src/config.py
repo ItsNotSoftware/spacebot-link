@@ -28,12 +28,14 @@ TOPIC_CMD_PATH = "/nav6d/planner/path"
 TOPIC_FLOOR_HEIGHT = "/floor_height"
 
 # Speeds and thresholds
-MOVE_SPEED = 0.8
+MOVE_SPEED = 2.0
 ROTATE_SPEED = 1.5
 FOLLOW_POS_EPS = 0.02
 FOLLOW_HPR_EPS = 1.0
 FOLLOW_REACHED_THRESH = 0.2
 FOLLOW_SAMPLE_PERIOD = 0.2
+AVATAR_AUTO_RESET_DISTANCE = 0.3
+AVATAR_AUTO_RESET_DELAY_S = 1.0
 
 # Path visualization defaults
 PATH_MODE_DEFAULT = "animated"  # poses | poses_line | animated | planes
@@ -63,10 +65,19 @@ FLOOR_SHADOW_THICKNESS = 3.0
 FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
 
-# Avatar offsets (center camera within the mesh)
-CAMERA_FORWARD_OFFSET_M = 0.10
-CAMERA_UP_OFFSET_M = 0.08
-AVATAR_CAMERA_OFFSET = (0.0, -CAMERA_FORWARD_OFFSET_M, CAMERA_UP_OFFSET_M)
+# Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
+CAMERA_FORWARD_OFFSET_M = 0.18
+CAMERA_UP_OFFSET_M = 0.05
+# ROS -> Panda: (x, y, z) = (-Y, X, Z). Camera pose is (0.36, 0, 0.13) in ROS.
+AVATAR_CAMERA_OFFSET = (0.0, CAMERA_FORWARD_OFFSET_M, CAMERA_UP_OFFSET_M)
+
+# Default camera intrinsics (matching SDF camera)
+CAMERA_WIDTH_PX = 1280
+CAMERA_HEIGHT_PX = 720
+CAMERA_FX = 1108.7654
+CAMERA_FY = 1108.7654
+CAMERA_CX = 640.0
+CAMERA_CY = 360.0
 
 # Key bindings
 FORWARD_BUTTON = KeyboardButton.ascii_key("w")
