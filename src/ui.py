@@ -311,14 +311,6 @@ class UI:
 
         btn_w = avail
         if _button(
-            "Reset Orientation",
-            (btn_w, btn_h),
-            (0.26, 0.46, 0.68, 1.0),
-            (0.30, 0.52, 0.78, 1.0),
-            (0.24, 0.40, 0.60, 1.0),
-        ):
-            status.get("reset_orientation", lambda: None)()
-        if _button(
             "Abort",
             (btn_w, btn_h),
             (0.70, 0.22, 0.22, 1.0),
@@ -326,6 +318,111 @@ class UI:
             (0.60, 0.18, 0.18, 1.0),
         ):
             self.trigger_abort()
+
+        imgui.end()
+
+        # Orientation window
+        orient_w = ctrl_w
+        orient_h = 320.0
+        orient_x = ctrl_x
+        orient_y = ctrl_y + ctrl_h + pad
+        imgui.set_next_window_pos((orient_x, orient_y), imgui.Cond_.once)
+        imgui.set_next_window_size((orient_w, orient_h), imgui.Cond_.once)
+        imgui.set_next_window_bg_alpha(0.94)
+        imgui.begin(
+            "Orientation",
+            flags=imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_resize,
+        )
+
+        controls_disabled = bool(status.get("move_robot", False))
+        if controls_disabled:
+            imgui.text_disabled("Avatar rotation disabled while controlling robot.")
+            imgui.spacing()
+
+        if controls_disabled and hasattr(imgui, "begin_disabled"):
+            imgui.begin_disabled()
+
+        rot_avail = imgui.get_content_region_avail().x
+        rot_half = (rot_avail - imgui.get_style().item_spacing.x) * 0.5
+        rot_btn_h = 46
+
+        def _apply_rot(dh: float, dp: float, dr: float) -> None:
+            if controls_disabled:
+                return
+            status.get("nudge_avatar_hpr", lambda _h, _p, _r: None)(dh, dp, dr)
+
+        imgui.text("Yaw")
+        if _button(
+            "Yaw Left 90",
+            (rot_half, rot_btn_h),
+            (0.22, 0.55, 0.52, 1.0),
+            (0.26, 0.62, 0.58, 1.0),
+            (0.18, 0.48, 0.46, 1.0),
+        ):
+            _apply_rot(90.0, 0.0, 0.0)
+        imgui.same_line()
+        if _button(
+            "Yaw Right 90",
+            (rot_half, rot_btn_h),
+            (0.22, 0.55, 0.52, 1.0),
+            (0.26, 0.62, 0.58, 1.0),
+            (0.18, 0.48, 0.46, 1.0),
+        ):
+            _apply_rot(-90.0, 0.0, 0.0)
+
+        imgui.spacing()
+        imgui.text("Pitch")
+        if _button(
+            "Pitch Up 90",
+            (rot_half, rot_btn_h),
+            (0.40, 0.52, 0.22, 1.0),
+            (0.46, 0.58, 0.26, 1.0),
+            (0.34, 0.46, 0.18, 1.0),
+        ):
+            _apply_rot(0.0, 90.0, 0.0)
+        imgui.same_line()
+        if _button(
+            "Pitch Down 90",
+            (rot_half, rot_btn_h),
+            (0.40, 0.52, 0.22, 1.0),
+            (0.46, 0.58, 0.26, 1.0),
+            (0.34, 0.46, 0.18, 1.0),
+        ):
+            _apply_rot(0.0, -90.0, 0.0)
+
+        imgui.spacing()
+        imgui.text("Roll")
+        if _button(
+            "Roll Left 90",
+            (rot_half, rot_btn_h),
+            (0.55, 0.32, 0.22, 1.0),
+            (0.62, 0.38, 0.26, 1.0),
+            (0.48, 0.28, 0.18, 1.0),
+        ):
+            _apply_rot(0.0, 0.0, 90.0)
+        imgui.same_line()
+        if _button(
+            "Roll Right 90",
+            (rot_half, rot_btn_h),
+            (0.55, 0.32, 0.22, 1.0),
+            (0.62, 0.38, 0.26, 1.0),
+            (0.48, 0.28, 0.18, 1.0),
+        ):
+            _apply_rot(0.0, 0.0, -90.0)
+
+        imgui.spacing()
+        if _button(
+            "Reset Orientation",
+            (rot_avail, rot_btn_h),
+            (0.26, 0.46, 0.68, 1.0),
+            (0.30, 0.52, 0.78, 1.0),
+            (0.24, 0.40, 0.60, 1.0),
+        ):
+            if not controls_disabled:
+                status.get("reset_orientation", lambda: None)()
+
+        if controls_disabled and hasattr(imgui, "end_disabled"):
+            imgui.end_disabled()
 
         imgui.end()
 

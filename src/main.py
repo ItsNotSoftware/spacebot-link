@@ -349,6 +349,7 @@ class SpacebotLinkApp(ShowBase):
             "activate_follow": self._activate_follow_mode,
             "activate_goal": self._activate_goal_mode,
             "reset_orientation": self.renderer.reset_avatar_to_camera_hpr,
+            "nudge_avatar_hpr": self.renderer.add_avatar_hpr,
             "path_mode": self.renderer.path_mode,
             "pose_stride": self.renderer.pose_stride,
             "line_stride": self.renderer.line_stride,
