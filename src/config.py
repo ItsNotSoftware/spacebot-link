@@ -36,9 +36,10 @@ FOLLOW_REACHED_THRESH = 0.2
 FOLLOW_SAMPLE_PERIOD = 0.2
 AVATAR_AUTO_RESET_DISTANCE = 0.3
 AVATAR_AUTO_RESET_DELAY_S = 1.0
+AVATAR_HIDE_DISTANCE = 0.15
 
 # Path visualization defaults
-PATH_MODE_DEFAULT = "animated"  # poses | poses_line | animated | planes
+PATH_MODE_DEFAULT = "poses_line"  # poses | poses_line | animated | planes
 PATH_POSE_STRIDE = 4
 PATH_LINE_STRIDE = 8
 PATH_ANIM_SPEED = 2.5  # m/s
@@ -66,8 +67,8 @@ FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
 
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
-CAMERA_FORWARD_OFFSET_M = 0.18
-CAMERA_UP_OFFSET_M = 0.05
+CAMERA_FORWARD_OFFSET_M = 0
+CAMERA_UP_OFFSET_M = 0.07
 # ROS -> Panda: (x, y, z) = (-Y, X, Z). Camera pose is (0.36, 0, 0.13) in ROS.
 AVATAR_CAMERA_OFFSET = (0.0, CAMERA_FORWARD_OFFSET_M, CAMERA_UP_OFFSET_M)
 
