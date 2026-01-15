@@ -20,6 +20,10 @@ from config import (
     TOPIC_PATH,
     TOPIC_POSE,
     TOPIC_FLOOR_HEIGHT,
+    TOPIC_PATH_QUALITY,
+    TOPIC_PATH_EXEC_SUMMARY_VEL,
+    TOPIC_PATH_EXEC_SUMMARY_FORCE,
+    PATH_QUALITY_CSV_ENABLED,
     default_cmd_endpoint,
     default_gltf_model,
     default_image_endpoint,
@@ -94,6 +98,8 @@ class SpacebotLinkApp(ShowBase):
         self._last_path_poses: List = []
         self._last_floor_height: Optional[str] = None
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
+        self._last_path_quality: Optional[Dict[str, Any]] = None
+        self._last_exec_summary_by_topic: Dict[str, Dict[str, Any]] = {}
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -118,6 +124,7 @@ class SpacebotLinkApp(ShowBase):
         """Poll ZMQ sockets to keep sensor/image caches current."""
         self.bus_sensors.poll(100)
         self.bus_images.poll(100)
+        self._maybe_log_path_quality_csv()
         return Task.cont
 
     def _camera_task(self, task: PythonTask) -> int:
@@ -292,6 +299,76 @@ class SpacebotLinkApp(ShowBase):
             self.renderer.render_path_markers(poses)
             self._last_path_poses = poses
         return Task.cont
+
+    def _maybe_log_path_quality_csv(self) -> None:
+        """Print CSV line when execution summary arrives, using cached quality."""
+        if not PATH_QUALITY_CSV_ENABLED:
+            return
+
+        payload = self.bus_sensors.get(TOPIC_PATH_QUALITY)
+        if isinstance(payload, dict) and payload != self._last_path_quality:
+            self._last_path_quality = payload
+
+        for topic in (
+            TOPIC_PATH_EXEC_SUMMARY_VEL,
+            TOPIC_PATH_EXEC_SUMMARY_FORCE,
+        ):
+            summary = self.bus_sensors.get(topic)
+            if not isinstance(summary, dict):
+                continue
+            if self._last_exec_summary_by_topic.get(topic) == summary:
+                continue
+            self._last_exec_summary_by_topic[topic] = summary
+            if not self._last_path_quality:
+                continue
+            header, line = self._format_path_quality_csv(self._last_path_quality, summary)
+            if line:
+                print(header)
+                print(line)
+
+    @staticmethod
+    def _format_path_quality_csv(
+        quality: Dict[str, Any], summary: Dict[str, Any]
+    ) -> tuple[str, str]:
+        def _float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        clearance = _float(quality.get("clearance_score"))
+        narrow = _float(quality.get("narrow_score"))
+        turn = _float(quality.get("turn_score"))
+        efficiency = _float(quality.get("efficiency_score"))
+        planned = _float(summary.get("planned_length"))
+        executed = _float(summary.get("executed_length"))
+        rms = _float(summary.get("rms_tracking_error"))
+
+        def _int(value: Any) -> int:
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+
+        nrc = _int(summary.get("nrc", quality.get("nrc", 0)))
+        mev = _float(summary.get("mev", quality.get("mev", 0.0)))
+
+        width = 12
+        labels = ("CLR", "NAR", "TRN", "EFF", "PLN", "EXE", "RMS", "NRC", "MEV")
+        header = "".join(f"{label:>{width}}" for label in labels)
+        values = (
+            f"{clearance:>{width}.5f}",
+            f"{narrow:>{width}.5f}",
+            f"{turn:>{width}.5f}",
+            f"{efficiency:>{width}.5f}",
+            f"{planned:>{width}.5f}",
+            f"{executed:>{width}.5f}",
+            f"{rms:>{width}.5f}",
+            f"{nrc:>{width}d}",
+            f"{mev:>{width}.5f}",
+        )
+        line = "".join(values)
+        return header, line
 
     def _prepend_robot_pose_if_needed(self, poses: List) -> List:
         """Ensure path lines originate at the current robot pose."""
