@@ -26,6 +26,9 @@ TOPIC_GOAL = "/nav6d/goal"
 TOPIC_PATH = "/nav6d/planner/path"
 TOPIC_CMD_PATH = "/nav6d/planner/path"
 TOPIC_FLOOR_HEIGHT = "/floor_height"
+TOPIC_PATH_QUALITY = "/nav6d/path_quality"
+TOPIC_PATH_EXEC_SUMMARY_VEL = "/nav6d/velocity_controller/path_execution_summary"
+TOPIC_PATH_EXEC_SUMMARY_FORCE = "/nav6d/force_controller/path_execution_summary"
 
 # Speeds and thresholds
 MOVE_SPEED = 2.0
@@ -65,6 +68,7 @@ FLOOR_LINE_COLOR = (0.0, 1.0, 1.0, 1.0)
 FLOOR_SHADOW_THICKNESS = 3.0
 FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
+PATH_QUALITY_CSV_ENABLED = True
 
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
 CAMERA_FORWARD_OFFSET_M = 0
