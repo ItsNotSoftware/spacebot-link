@@ -165,18 +165,13 @@ class SpacebotLinkApp(ShowBase):
             parsed = parse_floor_height(floor_payload)
             if parsed is not None:
                 axis_ros, distance = parsed
-                robot_ori = self.nav.state.last_ros_orientation
                 avatar_ros = panda_pose_to_ros_tuple(self.renderer.get_avatar_pose())
                 if avatar_ros is None:
                     self.renderer.clear_floor_indicator()
                     self._last_floor_height = None
                     return Task.cont
                 avatar_pos_ros, _ = avatar_ros
-                axis_world_ros = (
-                    rotate_vector_by_quaternion(axis_ros, robot_ori)
-                    if robot_ori is not None
-                    else axis_ros
-                )
+                axis_world_ros = axis_ros
                 axis_len = (
                     axis_world_ros[0] ** 2
                     + axis_world_ros[1] ** 2
