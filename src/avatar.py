@@ -103,6 +103,12 @@ class Avatar:
             self._back.hide()
             self._front.hide()
 
+    def set_opacity(self, alpha: float) -> None:
+        """Set uniform alpha for the avatar's dual-pass geometry."""
+        alpha = max(0.0, min(1.0, float(alpha)))
+        self._back.setColorScale(1.0, 1.0, 1.0, alpha)
+        self._front.setColorScale(1.0, 1.0, 1.0, alpha)
+
     def set_scale(self, s: float) -> None:
         """Uniformly scale avatar geometry."""
         self._back.setScale(s)

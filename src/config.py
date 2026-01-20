@@ -16,6 +16,15 @@ default_cmd_endpoint = "tcp://localhost:5557"
 default_gltf_model = "../assets/cobot_ghost.glb"
 PATH_GHOST_MODEL = "../assets/ghost_012.glb"
 
+# OctoMap raycast service (interface-side)
+OCTOMAP_SERVER_BIN = "octomap_raycast_service/build/octomap_raycast_service"
+OCTOMAP_SERVER_MAP = "octomap_raycast_service/iss.bt"
+OCTOMAP_SERVER_ENDPOINT = "tcp://127.0.0.1:5570"
+OCTOMAP_SERVER_MAX_RANGE = 50.0
+OCTOMAP_QUERY_PERIOD_S = 0.1
+AVATAR_ALPHA_VISIBLE = 0.85
+AVATAR_ALPHA_OCCLUDED = 0.35
+
 # ROS topics used by the bridge
 TOPIC_IMAGE = "/main_camera/image"
 TOPIC_CAMINFO = "/main_camera/camera_info"
@@ -68,7 +77,7 @@ FLOOR_LINE_COLOR = (0.0, 1.0, 1.0, 1.0)
 FLOOR_SHADOW_THICKNESS = 3.0
 FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
-PATH_QUALITY_CSV_ENABLED = True
+PATH_QUALITY_CSV_ENABLED = False
 
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
 CAMERA_FORWARD_OFFSET_M = 0

@@ -29,6 +29,11 @@ class UI:
         self._status_provider = status_provider
         self._imgui_ready: bool = False
         self._imgui_ini_path: Path = Path(__file__).resolve().parent.parent / "imgui.ini"
+        self._show_nav: bool = True
+        self._show_pathviz: bool = True
+        self._show_poses: bool = True
+        self._show_octomap: bool = True
+        self._show_octomap_raw: bool = False
 
         self._init_imgui()
 
@@ -113,6 +118,26 @@ class UI:
         imgui.text_disabled("|")
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
+        occluded = status.get("octomap_occluded")
+        occluded_bool = None
+        if isinstance(occluded, bool):
+            occluded_bool = occluded
+        elif isinstance(occluded, str):
+            occluded_lower = occluded.strip().lower()
+            if occluded_lower in ("true", "false"):
+                occluded_bool = occluded_lower == "true"
+        if occluded_bool is not None:
+            imgui.same_line()
+            imgui.text_disabled("|")
+            imgui.same_line()
+            occ_color = (
+                (1.0, 0.45, 0.45, 1.0)
+                if occluded_bool
+                else (0.7, 1.0, 0.7, 1.0)
+            )
+            imgui.text_colored(
+                occ_color, f"Occluded: {'yes' if occluded_bool else 'no'}"
+            )
 
         changed_nav, publish_nav = imgui.checkbox(
             "Publish goals/paths", bool(status.get("nav_enabled", True))
@@ -133,119 +158,205 @@ class UI:
             status.get("set_floor_projection_enabled", lambda _v: None)(floor_on)
 
         imgui.spacing()
-        imgui.begin_child("Nav", (0, 160), True)
-        if status.get("mode") == "Goal Mode":
-            imgui.text("Goal")
-            ros_goal = status.get("last_goal_ros")
-            if ros_goal is not None:
-                (gx, gy, gz), (gh, gp, gr) = ros_goal
-                imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
-            else:
-                last_goal = status.get("last_goal_panda")
-                if last_goal is not None:
-                    (gx, gy, gz), (gh, gp, gr) = last_goal
-                    imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                    imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+        imgui.separator()
+        imgui.text("Widget visibility")
+        imgui.text("Show sections")
+        imgui.same_line()
+        _, self._show_nav = imgui.checkbox("Nav", self._show_nav)
+        imgui.same_line()
+        _, self._show_pathviz = imgui.checkbox("PathViz", self._show_pathviz)
+        imgui.same_line()
+        _, self._show_poses = imgui.checkbox("Poses", self._show_poses)
+        imgui.same_line()
+        _, self._show_octomap = imgui.checkbox("OctoMap", self._show_octomap)
+        imgui.spacing()
+        imgui.columns(2, "debug_columns", False)
+        if self._show_nav:
+            imgui.begin_child("Nav", (0, 170), True)
+            if status.get("mode") == "Goal Mode":
+                imgui.text("Goal")
+                ros_goal = status.get("last_goal_ros")
+                if ros_goal is not None:
+                    (gx, gy, gz), (gh, gp, gr) = ros_goal
+                    imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                    imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
                 else:
-                    imgui.text("  waiting for goal")
-            imgui.text(f"  path poses: {status.get('path_pose_count', 0)}")
-        else:
-            imgui.text("Follow path")
-            imgui.text(f"  buffered poses: {status.get('waypoint_count', 0)}")
-            tip = status.get("follow_tip")
-            if tip is not None:
-                fx, fy, fz = tip
-                imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
-        imgui.end_child()
+                    last_goal = status.get("last_goal_panda")
+                    if last_goal is not None:
+                        (gx, gy, gz), (gh, gp, gr) = last_goal
+                        imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                        imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+                    else:
+                        imgui.text("  waiting for goal")
+                imgui.text(f"  path poses: {status.get('path_pose_count', 0)}")
+            else:
+                imgui.text("Follow path")
+                imgui.text(f"  buffered poses: {status.get('waypoint_count', 0)}")
+                tip = status.get("follow_tip")
+                if tip is not None:
+                    fx, fy, fz = tip
+                    imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
+            imgui.end_child()
 
         imgui.spacing()
-        imgui.begin_child("PathViz", (0, 220), True)
-        imgui.text("Path visualization")
-        modes = ["poses", "poses_line", "planes", "animated"]
-        current_mode = status.get("path_mode", modes[0])
-        try:
-            idx = modes.index(current_mode)
-        except ValueError:
-            idx = 0
-        changed_mode, new_idx = imgui.combo("Mode", idx, modes)
-        if changed_mode:
-            status.get("set_path_mode", lambda _m: None)(modes[new_idx])
+        if self._show_pathviz:
+            imgui.begin_child("PathViz", (0, 220), True)
+            imgui.text("Path visualization")
+            modes = ["poses", "poses_line", "planes", "animated"]
+            current_mode = status.get("path_mode", modes[0])
+            try:
+                idx = modes.index(current_mode)
+            except ValueError:
+                idx = 0
+            changed_mode, new_idx = imgui.combo("Mode", idx, modes)
+            if changed_mode:
+                status.get("set_path_mode", lambda _m: None)(modes[new_idx])
 
-        selected_mode = modes[new_idx]
-        if selected_mode == "poses":
-            pose_stride = int(status.get("pose_stride", 4))
-            imgui.text("Ghost stride (every Nth pose)")
-            imgui.set_next_item_width(140)
-            changed, pose_stride = imgui.input_int("##pose_stride", pose_stride)
-            if changed:
-                status.get("set_pose_stride", lambda _v: None)(max(1, pose_stride))
-        elif selected_mode == "poses_line":
-            line_stride = int(status.get("line_stride", 8))
-            imgui.text("Ghost stride (every Nth pose)")
-            imgui.set_next_item_width(140)
-            changed, line_stride = imgui.input_int("##line_stride", line_stride)
-            if changed:
-                status.get("set_line_stride", lambda _v: None)(max(1, line_stride))
-        elif selected_mode == "planes":
-            plane_stride = int(status.get("pose_stride", 4))
-            imgui.text("Plane stride (every Nth pose)")
-            imgui.set_next_item_width(140)
-            changed, plane_stride = imgui.input_int("##plane_stride", plane_stride)
-            if changed:
-                status.get("set_pose_stride", lambda _v: None)(max(1, plane_stride))
-        else:
-            anim_speed = float(status.get("anim_speed", 1.0))
-            imgui.text("Anim speed (m/s)")
-            imgui.set_next_item_width(140)
-            changed, anim_speed = imgui.input_float("##anim_speed", anim_speed, step=0.0)
-            if changed:
-                status.get("set_anim_speed", lambda _v: None)(max(0.01, anim_speed))
-            anim_instances = int(status.get("anim_instances", 1))
-            imgui.text("Ghost instances")
-            imgui.set_next_item_width(140)
-            changed_count, anim_instances = imgui.input_int("##anim_instances", anim_instances)
-            if changed_count:
-                status.get("set_anim_instances", lambda _v: None)(max(1, anim_instances))
-            anim_line_enabled = bool(status.get("anim_line_enabled", True))
-            changed_line, anim_line_enabled = imgui.checkbox(
-                "Show path line", anim_line_enabled
-            )
-            if changed_line:
-                status.get("set_anim_line_enabled", lambda _v: None)(anim_line_enabled)
-        imgui.end_child()
-
-        imgui.spacing()
-        imgui.columns(2, "pose_columns", False)
-        imgui.text("Avatar pose (ROS frame)")
-        av_ros_tuple = status.get("avatar_ros_pose")
-        if av_ros_tuple is not None:
-            (ax, ay, az), (ar, ap, ayaw) = av_ros_tuple
-            imgui.text(f"  pos (m): {ax:.2f}, {ay:.2f}, {az:.2f}")
-            imgui.text(f"  rpy (deg): {ar:.1f}, {ap:.1f}, {ayaw:.1f}")
-        else:
-            imgui.text("  waiting for pose")
+            selected_mode = modes[new_idx]
+            if selected_mode == "poses":
+                pose_stride = int(status.get("pose_stride", 4))
+                imgui.text("Ghost stride (every Nth pose)")
+                imgui.set_next_item_width(140)
+                changed, pose_stride = imgui.input_int("##pose_stride", pose_stride)
+                if changed:
+                    status.get("set_pose_stride", lambda _v: None)(max(1, pose_stride))
+            elif selected_mode == "poses_line":
+                line_stride = int(status.get("line_stride", 8))
+                imgui.text("Ghost stride (every Nth pose)")
+                imgui.set_next_item_width(140)
+                changed, line_stride = imgui.input_int("##line_stride", line_stride)
+                if changed:
+                    status.get("set_line_stride", lambda _v: None)(max(1, line_stride))
+            elif selected_mode == "planes":
+                plane_stride = int(status.get("pose_stride", 4))
+                imgui.text("Plane stride (every Nth pose)")
+                imgui.set_next_item_width(140)
+                changed, plane_stride = imgui.input_int("##plane_stride", plane_stride)
+                if changed:
+                    status.get("set_pose_stride", lambda _v: None)(max(1, plane_stride))
+            else:
+                anim_speed = float(status.get("anim_speed", 1.0))
+                imgui.text("Anim speed (m/s)")
+                imgui.set_next_item_width(140)
+                changed, anim_speed = imgui.input_float(
+                    "##anim_speed", anim_speed, step=0.0
+                )
+                if changed:
+                    status.get("set_anim_speed", lambda _v: None)(max(0.01, anim_speed))
+                anim_instances = int(status.get("anim_instances", 1))
+                imgui.text("Ghost instances")
+                imgui.set_next_item_width(140)
+                changed_count, anim_instances = imgui.input_int(
+                    "##anim_instances", anim_instances
+                )
+                if changed_count:
+                    status.get("set_anim_instances", lambda _v: None)(
+                        max(1, anim_instances)
+                    )
+                anim_line_enabled = bool(status.get("anim_line_enabled", True))
+                changed_line, anim_line_enabled = imgui.checkbox(
+                    "Show path line", anim_line_enabled
+                )
+                if changed_line:
+                    status.get("set_anim_line_enabled", lambda _v: None)(
+                        anim_line_enabled
+                    )
+            imgui.end_child()
 
         imgui.next_column()
-        imgui.text("Robot pose (ROS frame)")
-        robot_pose = status.get("robot_ros_pose")
-        if robot_pose is not None:
-            (x, y, z), rpy = robot_pose
-            imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
-            if rpy is not None:
-                roll, pitch, yaw = rpy
-                imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
-        else:
-            imgui.text("  waiting for /space_cobot/pose")
-        imgui.columns(1)
+        if self._show_poses:
+            imgui.begin_child("Poses", (0, 170), True)
+            imgui.columns(2, "pose_columns", False)
+            imgui.text("Avatar pose (ROS frame)")
+            av_ros_tuple = status.get("avatar_ros_pose")
+            if av_ros_tuple is not None:
+                (ax, ay, az), (ar, ap, ayaw) = av_ros_tuple
+                imgui.text(f"  pos (m): {ax:.2f}, {ay:.2f}, {az:.2f}")
+                imgui.text(f"  rpy (deg): {ar:.1f}, {ap:.1f}, {ayaw:.1f}")
+            else:
+                imgui.text("  waiting for pose")
+
+            imgui.next_column()
+            imgui.text("Robot pose (ROS frame)")
+            robot_pose = status.get("robot_ros_pose")
+            if robot_pose is not None:
+                (x, y, z), rpy = robot_pose
+                imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
+                if rpy is not None:
+                    roll, pitch, yaw = rpy
+                    imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
+            else:
+                imgui.text("  waiting for /space_cobot/pose")
+            imgui.columns(1)
+            imgui.end_child()
 
         pos_err = status.get("avatar_robot_error")
         if pos_err is not None:
             imgui.spacing()
             imgui.text(f"Avatar-robot position error: {pos_err:.3f} m")
-        floor_height = status.get("floor_height")
-        if floor_height is not None:
-            imgui.text(f"Floor height: {floor_height}")
+        if self._show_octomap:
+            imgui.begin_child("OctoMap", (0, 220), True)
+            imgui.text("OctoMap Raycast")
+            imgui.separator()
+
+            occluded_flag = status.get("octomap_occluded")
+            occluded_display = None
+            if isinstance(occluded_flag, bool):
+                occluded_display = occluded_flag
+            elif isinstance(occluded_flag, str):
+                lower = occluded_flag.strip().lower()
+                if lower in ("true", "false"):
+                    occluded_display = lower == "true"
+
+            if occluded_display is None:
+                imgui.text("avatar_occluded=unknown")
+            else:
+                occ_color = (
+                    (1.0, 0.45, 0.45, 1.0)
+                    if occluded_display
+                    else (0.7, 1.0, 0.7, 1.0)
+                )
+                imgui.text_colored(
+                    occ_color,
+                    f"avatar_occluded={str(occluded_display).lower()}",
+                )
+
+            imgui.spacing()
+            imgui.columns(2, "octo_kv", False)
+
+            ground_axis = status.get("octomap_ground_axis")
+            ground_distance = status.get("octomap_ground_distance")
+            imgui.text("ground_axis")
+            imgui.next_column()
+            imgui.text("unknown" if ground_axis is None else f"{ground_axis}")
+            imgui.next_column()
+
+            imgui.text("ground_distance_m")
+            imgui.next_column()
+            if ground_distance is None:
+                imgui.text("unknown")
+            else:
+                try:
+                    dist_val = float(ground_distance)
+                    imgui.text(f"{dist_val:.2f}")
+                except Exception:
+                    imgui.text(str(ground_distance))
+            imgui.columns(1)
+
+            octomap_json = status.get("octomap_json")
+            if octomap_json:
+                imgui.spacing()
+                _, self._show_octomap_raw = imgui.checkbox(
+                    "Show raw JSON", self._show_octomap_raw
+                )
+                if self._show_octomap_raw:
+                    imgui.spacing()
+                    imgui.begin_child("octomap_json", (0, 90), True)
+                    imgui.text_wrapped(octomap_json)
+                    imgui.end_child()
+            imgui.end_child()
+
+        imgui.columns(1)
 
         imgui.end()
 

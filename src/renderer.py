@@ -447,6 +447,10 @@ class Renderer:
         """Toggle avatar visibility in the scene."""
         self.avatar.set_visible(visible)
 
+    def set_avatar_opacity(self, alpha: float) -> None:
+        """Adjust avatar transparency."""
+        self.avatar.set_opacity(alpha)
+
     def move_avatar(self, dx: float, dy: float, dz: float) -> None:
         """Translate avatar in world space by the given deltas."""
         self.avatar.move_world(dx, dy, dz)
