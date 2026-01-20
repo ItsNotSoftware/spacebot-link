@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
+import json
+import math
+import os
+import subprocess
 from typing import Any, Dict, Optional, Sequence, List, Tuple
 
 from panda3d.core import loadPrcFileData, PythonTask
@@ -19,7 +23,6 @@ from config import (
     TOPIC_IMAGE,
     TOPIC_PATH,
     TOPIC_POSE,
-    TOPIC_FLOOR_HEIGHT,
     TOPIC_PATH_QUALITY,
     TOPIC_PATH_EXEC_SUMMARY_VEL,
     TOPIC_PATH_EXEC_SUMMARY_FORCE,
@@ -28,6 +31,13 @@ from config import (
     default_gltf_model,
     default_image_endpoint,
     default_sensor_endpoint,
+    OCTOMAP_SERVER_BIN,
+    OCTOMAP_SERVER_ENDPOINT,
+    OCTOMAP_SERVER_MAP,
+    OCTOMAP_SERVER_MAX_RANGE,
+    OCTOMAP_QUERY_PERIOD_S,
+    AVATAR_ALPHA_OCCLUDED,
+    AVATAR_ALPHA_VISIBLE,
     FLOOR_PROJECTION_ENABLED,
     AVATAR_AUTO_RESET_DISTANCE,
     AVATAR_AUTO_RESET_DELAY_S,
@@ -37,18 +47,18 @@ from utils import (
     extract_ros_pose,
     is_zero_cmd_vel,
     panda_pose_to_ros_tuple,
+    panda_pose_to_ros,
     parse_ros_path,
     ros_position_to_panda_pos,
     ros_pose_to_panda_pos_hpr,
     ros_vector_to_panda,
-    rotate_vector_by_quaternion,
-    parse_floor_height,
 )
 from input_controller import InputController
 from navigation import Navigation
 from renderer import Renderer
 from teleop_bus import TeleopBusPub, TeleopBusSub
 from ui import UI
+import zmq
 
 # ---- config before ShowBase ----
 loadPrcFileData("", f"window-title {WINDOW_TITLE}")
@@ -100,6 +110,12 @@ class SpacebotLinkApp(ShowBase):
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
         self._last_path_quality: Optional[Dict[str, Any]] = None
         self._last_exec_summary_by_topic: Dict[str, Dict[str, Any]] = {}
+        self._octomap_proc: Optional[subprocess.Popen] = None
+        self._octomap_socket: Optional[zmq.Socket] = None
+        self._octomap_context = zmq.Context.instance()
+        self._last_octomap: Optional[Dict[str, Any]] = None
+        self._last_octomap_raw: Optional[str] = None
+        self._last_occluded: Optional[bool] = None
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -113,11 +129,18 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
         self.taskMgr.add(self._path_task, "PathTask")
         self.taskMgr.doMethodLater(
+            OCTOMAP_QUERY_PERIOD_S, self._octomap_task, "OctomapTask"
+        )
+        self.taskMgr.doMethodLater(
             self.nav.follow_sample_period, self._follow_mode_tick, "FollowModeTick"
         )
 
         # cleanup
         self.exitFunc: Optional[callable] = self._cleanup
+
+        self._start_octomap_process()
+        self._init_octomap_socket()
+        self.renderer.set_avatar_opacity(AVATAR_ALPHA_VISIBLE)
 
     # ---- tasks ----
     def _bus_task(self, task: PythonTask) -> int:
@@ -159,83 +182,181 @@ class SpacebotLinkApp(ShowBase):
                 self._avatar_spawned_from_pose = True
             self._update_avatar_visibility(parsed_pos_hpr)
         self._maybe_sync_avatar_on_stop()
+        return Task.cont
 
-        floor_payload = self.bus_sensors.get(TOPIC_FLOOR_HEIGHT)
-        if isinstance(floor_payload, dict):
-            parsed = parse_floor_height(floor_payload)
-            if parsed is not None:
-                axis_ros, distance = parsed
-                avatar_ros = panda_pose_to_ros_tuple(self.renderer.get_avatar_pose())
-                if avatar_ros is None:
-                    self.renderer.clear_floor_indicator()
-                    self._last_floor_height = None
-                    return Task.cont
-                avatar_pos_ros, _ = avatar_ros
-                axis_world_ros = axis_ros
-                axis_len = (
-                    axis_world_ros[0] ** 2
-                    + axis_world_ros[1] ** 2
-                    + axis_world_ros[2] ** 2
-                ) ** 0.5
-                if axis_len < 1e-6:
-                    self.renderer.clear_floor_indicator()
-                    self._last_floor_height = None
-                    return Task.cont
-                axis_unit = (
-                    axis_world_ros[0] / axis_len,
-                    axis_world_ros[1] / axis_len,
-                    axis_world_ros[2] / axis_len,
-                )
-                plane_point_ros = (
-                    axis_unit[0] * distance,
-                    axis_unit[1] * distance,
-                    axis_unit[2] * distance,
-                )
-                dist_to_plane = (
-                    (plane_point_ros[0] - avatar_pos_ros[0]) * axis_unit[0]
-                    + (plane_point_ros[1] - avatar_pos_ros[1]) * axis_unit[1]
-                    + (plane_point_ros[2] - avatar_pos_ros[2]) * axis_unit[2]
-                )
-                shadow_pos_ros = (
-                    avatar_pos_ros[0] + axis_unit[0] * dist_to_plane,
-                    avatar_pos_ros[1] + axis_unit[1] * dist_to_plane,
-                    avatar_pos_ros[2] + axis_unit[2] * dist_to_plane,
-                )
-                avatar_pos_panda = ros_position_to_panda_pos(
-                    {"x": avatar_pos_ros[0], "y": avatar_pos_ros[1], "z": avatar_pos_ros[2]}
-                )
-                shadow_pos_panda = ros_position_to_panda_pos(
-                    {"x": shadow_pos_ros[0], "y": shadow_pos_ros[1], "z": shadow_pos_ros[2]}
-                )
-                if avatar_pos_panda is None or shadow_pos_panda is None:
-                    self.renderer.clear_floor_indicator()
-                    self._last_floor_height = None
-                    return Task.cont
-                axis_panda = ros_vector_to_panda(axis_unit)
-                if self._floor_projection_enabled:
-                    robot_pose_panda = self.nav.state.last_robot_pose_panda
-                    if robot_pose_panda is None:
-                        self.renderer.clear_floor_indicator()
-                        self._last_floor_height = None
-                        return Task.cont
-                    (rx, ry, rz), _ = robot_pose_panda
-                    dx = avatar_pos_panda[0] - rx
-                    dy = avatar_pos_panda[1] - ry
-                    dz = avatar_pos_panda[2] - rz
-                    dist_to_robot = (dx * dx + dy * dy + dz * dz) ** 0.5
-                    self.renderer.update_floor_indicator(
-                        avatar_pos_panda, shadow_pos_panda, axis_panda, dist_to_robot
-                    )
-                else:
-                    self.renderer.clear_floor_indicator()
-                self._last_floor_height = floor_payload.get("value")
-            else:
-                self.renderer.clear_floor_indicator()
-                self._last_floor_height = None
-        else:
+    def _start_octomap_process(self) -> None:
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        bin_path = os.path.abspath(os.path.join(root_dir, OCTOMAP_SERVER_BIN))
+        map_path = os.path.abspath(os.path.join(root_dir, OCTOMAP_SERVER_MAP))
+        if not os.path.isfile(bin_path):
+            print(f"[octomap] Binary not found: {bin_path}")
+            return
+        if not os.path.isfile(map_path):
+            print(f"[octomap] Map not found: {map_path}")
+            return
+
+        args = [
+            bin_path,
+            map_path,
+            OCTOMAP_SERVER_ENDPOINT,
+            str(OCTOMAP_SERVER_MAX_RANGE),
+        ]
+        if self._octomap_proc is not None and self._octomap_proc.poll() is None:
+            return
+        try:
+            self._octomap_proc = subprocess.Popen(
+                args,
+                cwd=os.path.dirname(bin_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as ex:
+            print(f"[octomap] Failed to start process: {ex}")
+
+    def _init_octomap_socket(self) -> None:
+        sock = self._octomap_context.socket(zmq.REQ)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt(zmq.RCVTIMEO, 60)
+        sock.setsockopt(zmq.SNDTIMEO, 60)
+        sock.setsockopt(zmq.REQ_RELAXED, 1)
+        sock.setsockopt(zmq.REQ_CORRELATE, 1)
+        sock.connect(OCTOMAP_SERVER_ENDPOINT)
+        self._octomap_socket = sock
+
+    def _octomap_task(self, task: PythonTask) -> int:
+        if self._octomap_proc is not None:
+            rc = self._octomap_proc.poll()
+            if rc is not None:
+                stdout, stderr = self._octomap_proc.communicate()
+                if stdout:
+                    print(f"[octomap] stdout:\n{stdout.strip()}")
+                if stderr:
+                    print(f"[octomap] stderr:\n{stderr.strip()}")
+                print(f"[octomap] process exited with code {rc}")
+                self._octomap_proc = None
+                return Task.again
+        if self._octomap_socket is None:
+            return Task.again
+
+        robot_pose_panda = self.nav.state.last_robot_pose_panda
+        if robot_pose_panda is None:
+            return Task.again
+
+        robot_pose_ros = panda_pose_to_ros(robot_pose_panda)
+        avatar_pose_panda = self.renderer.get_avatar_pose()
+        avatar_pose_ros = panda_pose_to_ros(avatar_pose_panda)
+        if robot_pose_ros is None or avatar_pose_ros is None:
+            return Task.again
+
+        payload = {
+            "type": "avatar_query",
+            "robot_pose": robot_pose_ros,
+            "avatar_pose": avatar_pose_ros,
+        }
+
+        try:
+            self._octomap_socket.send_string(json.dumps(payload))
+            response_json = self._octomap_socket.recv_string()
+        except zmq.Again:
+            return Task.again
+        except Exception:
+            return Task.again
+
+        try:
+            response = json.loads(response_json)
+        except Exception:
+            return Task.again
+
+        self._last_octomap = response
+        self._last_octomap_raw = response_json
+        self._apply_octomap_response(response, avatar_pose_ros, robot_pose_panda)
+        return Task.again
+
+    def _apply_octomap_response(
+        self,
+        response: Dict[str, Any],
+        avatar_pose_ros: Dict[str, Dict[str, float]],
+        robot_pose_panda: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
+    ) -> None:
+        axis_map = {
+            "x": (1.0, 0.0, 0.0),
+            "-x": (-1.0, 0.0, 0.0),
+            "y": (0.0, 1.0, 0.0),
+            "-y": (0.0, -1.0, 0.0),
+            "z": (0.0, 0.0, 1.0),
+            "-z": (0.0, 0.0, -1.0),
+        }
+
+        axis_name = response.get("ground_axis")
+        axis_ros = axis_map.get(axis_name)
+        try:
+            ground_distance = float(response.get("ground_distance"))
+        except Exception:
+            ground_distance = float("nan")
+
+        if axis_ros is None or not math.isfinite(ground_distance):
             self.renderer.clear_floor_indicator()
             self._last_floor_height = None
-        return Task.cont
+            return
+
+        avatar_pos_ros = avatar_pose_ros.get("position", {})
+        try:
+            ax = float(avatar_pos_ros.get("x"))
+            ay = float(avatar_pos_ros.get("y"))
+            az = float(avatar_pos_ros.get("z"))
+        except Exception:
+            self.renderer.clear_floor_indicator()
+            self._last_floor_height = None
+            return
+
+        shadow_pos_ros = (
+            ax + axis_ros[0] * ground_distance,
+            ay + axis_ros[1] * ground_distance,
+            az + axis_ros[2] * ground_distance,
+        )
+
+        avatar_pos_panda = ros_position_to_panda_pos({"x": ax, "y": ay, "z": az})
+        shadow_pos_panda = ros_position_to_panda_pos(
+            {"x": shadow_pos_ros[0], "y": shadow_pos_ros[1], "z": shadow_pos_ros[2]}
+        )
+        if avatar_pos_panda is None or shadow_pos_panda is None:
+            self.renderer.clear_floor_indicator()
+            self._last_floor_height = None
+            return
+
+        axis_panda = ros_vector_to_panda(axis_ros)
+        if self._floor_projection_enabled:
+            (rx, ry, rz), _ = robot_pose_panda
+            dx = avatar_pos_panda[0] - rx
+            dy = avatar_pos_panda[1] - ry
+            dz = avatar_pos_panda[2] - rz
+            dist_to_robot = (dx * dx + dy * dy + dz * dz) ** 0.5
+            self.renderer.update_floor_indicator(
+                avatar_pos_panda, shadow_pos_panda, axis_panda, dist_to_robot
+            )
+        else:
+            self.renderer.clear_floor_indicator()
+
+        self._last_floor_height = ground_distance
+
+        occluded = response.get("avatar_occluded")
+        occluded_bool: Optional[bool]
+        if isinstance(occluded, bool):
+            occluded_bool = occluded
+        elif isinstance(occluded, str):
+            occluded_lower = occluded.strip().lower()
+            if occluded_lower in ("true", "false"):
+                occluded_bool = occluded_lower == "true"
+            else:
+                occluded_bool = None
+        else:
+            occluded_bool = None
+
+        if occluded_bool is not None and occluded_bool != self._last_occluded:
+            alpha = AVATAR_ALPHA_OCCLUDED if occluded_bool else AVATAR_ALPHA_VISIBLE
+            self.renderer.set_avatar_opacity(alpha)
+            self._last_occluded = occluded_bool
 
     def _keyboard_task(self, task: PythonTask) -> int:
         """Handle keyboard-driven avatar/robot control."""
@@ -414,6 +535,22 @@ class SpacebotLinkApp(ShowBase):
             "robot_ros_pose": robot_ros,
             "avatar_robot_error": pos_err,
             "floor_height": self._last_floor_height,
+            "octomap_json": (
+                self._last_octomap_raw[:2000] if self._last_octomap_raw else None
+            ),
+            "octomap_ground_distance": (
+                self._last_octomap.get("ground_distance")
+                if self._last_octomap
+                else None
+            ),
+            "octomap_ground_axis": (
+                self._last_octomap.get("ground_axis") if self._last_octomap else None
+            ),
+            "octomap_occluded": (
+                self._last_octomap.get("avatar_occluded")
+                if self._last_octomap
+                else None
+            ),
             "floor_projection_enabled": self._floor_projection_enabled,
             "set_floor_projection_enabled": self._set_floor_projection_enabled,
             "set_nav_enabled": self._set_nav_enabled,
@@ -597,6 +734,16 @@ class SpacebotLinkApp(ShowBase):
             pass
         try:
             self.cmd_pub.close()
+        except Exception:
+            pass
+        try:
+            if self._octomap_socket is not None:
+                self._octomap_socket.close(0)
+        except Exception:
+            pass
+        try:
+            if self._octomap_proc is not None:
+                self._octomap_proc.terminate()
         except Exception:
             pass
         self.renderer.clear_path_markers()
