@@ -36,8 +36,8 @@ from config import (
     OCTOMAP_SERVER_MAP,
     OCTOMAP_SERVER_MAX_RANGE,
     OCTOMAP_QUERY_PERIOD_S,
-    AVATAR_ALPHA_OCCLUDED,
-    AVATAR_ALPHA_VISIBLE,
+    AVATAR_COLOR_VISIBLE,
+    AVATAR_COLOR_OCCLUDED,
     FLOOR_PROJECTION_ENABLED,
     AVATAR_AUTO_RESET_DISTANCE,
     AVATAR_AUTO_RESET_DELAY_S,
@@ -140,7 +140,7 @@ class SpacebotLinkApp(ShowBase):
 
         self._start_octomap_process()
         self._init_octomap_socket()
-        self.renderer.set_avatar_opacity(AVATAR_ALPHA_VISIBLE)
+        self.renderer.set_avatar_color(AVATAR_COLOR_VISIBLE)
 
     # ---- tasks ----
     def _bus_task(self, task: PythonTask) -> int:
@@ -354,8 +354,8 @@ class SpacebotLinkApp(ShowBase):
             occluded_bool = None
 
         if occluded_bool is not None and occluded_bool != self._last_occluded:
-            alpha = AVATAR_ALPHA_OCCLUDED if occluded_bool else AVATAR_ALPHA_VISIBLE
-            self.renderer.set_avatar_opacity(alpha)
+            color = AVATAR_COLOR_OCCLUDED if occluded_bool else AVATAR_COLOR_VISIBLE
+            self.renderer.set_avatar_color(color)
             self._last_occluded = occluded_bool
 
     def _keyboard_task(self, task: PythonTask) -> int:
