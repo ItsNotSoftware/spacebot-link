@@ -14,7 +14,7 @@ default_sensor_endpoint = "tcp://localhost:5556"
 default_image_endpoint = "tcp://localhost:5560"
 default_cmd_endpoint = "tcp://localhost:5557"
 default_gltf_model = "../assets/cobot_ghost.glb"
-PATH_GHOST_MODEL = "../assets/ghost_012.glb"
+PATH_GHOST_MODEL = "../assets/ghost_006.glb"
 
 # OctoMap raycast service (interface-side)
 OCTOMAP_SERVER_BIN = "octomap_raycast_service/build/octomap_raycast_service"
@@ -23,7 +23,8 @@ OCTOMAP_SERVER_ENDPOINT = "tcp://127.0.0.1:5570"
 OCTOMAP_SERVER_MAX_RANGE = 50.0
 OCTOMAP_QUERY_PERIOD_S = 0.1
 AVATAR_ALPHA_VISIBLE = 0.85
-AVATAR_ALPHA_OCCLUDED = 0.35
+AVATAR_COLOR_VISIBLE = (1.0, 1.0, 1.0, AVATAR_ALPHA_VISIBLE)
+AVATAR_COLOR_OCCLUDED = (1.0, 0.0, 0.0, AVATAR_ALPHA_VISIBLE)
 
 # ROS topics used by the bridge
 TOPIC_IMAGE = "/main_camera/image"

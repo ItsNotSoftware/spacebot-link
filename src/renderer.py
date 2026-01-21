@@ -451,6 +451,10 @@ class Renderer:
         """Adjust avatar transparency."""
         self.avatar.set_opacity(alpha)
 
+    def set_avatar_color(self, rgba: Tuple[float, float, float, float]) -> None:
+        """Set avatar color scale (RGBA)."""
+        self.avatar.set_color(*rgba)
+
     def move_avatar(self, dx: float, dy: float, dz: float) -> None:
         """Translate avatar in world space by the given deltas."""
         self.avatar.move_world(dx, dy, dz)

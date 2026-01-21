@@ -109,6 +109,15 @@ class Avatar:
         self._back.setColorScale(1.0, 1.0, 1.0, alpha)
         self._front.setColorScale(1.0, 1.0, 1.0, alpha)
 
+    def set_color(self, r: float, g: float, b: float, a: float) -> None:
+        """Set uniform color scale for the avatar's dual-pass geometry."""
+        r = max(0.0, min(1.0, float(r)))
+        g = max(0.0, min(1.0, float(g)))
+        b = max(0.0, min(1.0, float(b)))
+        a = max(0.0, min(1.0, float(a)))
+        self._back.setColorScale(r, g, b, a)
+        self._front.setColorScale(r, g, b, a)
+
     def set_scale(self, s: float) -> None:
         """Uniformly scale avatar geometry."""
         self._back.setScale(s)
