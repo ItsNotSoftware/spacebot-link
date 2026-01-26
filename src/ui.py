@@ -109,6 +109,15 @@ class UI:
         imgui.set_next_window_bg_alpha(0.92)
         imgui.begin("Debug")
 
+        def _parse_bool_flag(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in ("true", "false"):
+                    return lowered == "true"
+            return None
+
         fps_text = status.get("fps", 0.0)
         imgui.text(f"FPS: {fps_text:.1f}")
 
@@ -118,25 +127,32 @@ class UI:
         imgui.text_disabled("|")
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
-        occluded = status.get("octomap_occluded")
-        occluded_bool = None
-        if isinstance(occluded, bool):
-            occluded_bool = occluded
-        elif isinstance(occluded, str):
-            occluded_lower = occluded.strip().lower()
-            if occluded_lower in ("true", "false"):
-                occluded_bool = occluded_lower == "true"
+        occluded_bool = _parse_bool_flag(status.get("octomap_occluded"))
         if occluded_bool is not None:
             imgui.same_line()
             imgui.text_disabled("|")
             imgui.same_line()
             occ_color = (
-                (1.0, 0.45, 0.45, 1.0)
+                (1.0, 0.6, 0.2, 1.0)
                 if occluded_bool
                 else (0.7, 1.0, 0.7, 1.0)
             )
             imgui.text_colored(
                 occ_color, f"Occluded: {'yes' if occluded_bool else 'no'}"
+            )
+        in_obstacle_bool = _parse_bool_flag(status.get("octomap_in_obstacle"))
+        if in_obstacle_bool is not None:
+            imgui.same_line()
+            imgui.text_disabled("|")
+            imgui.same_line()
+            inside_color = (
+                (1.0, 0.35, 0.35, 1.0)
+                if in_obstacle_bool
+                else (0.7, 1.0, 0.7, 1.0)
+            )
+            imgui.text_colored(
+                inside_color,
+                f"Inside obstacle: {'yes' if in_obstacle_bool else 'no'}",
             )
 
         changed_nav, publish_nav = imgui.checkbox(
@@ -299,26 +315,32 @@ class UI:
             imgui.text("OctoMap Raycast")
             imgui.separator()
 
-            occluded_flag = status.get("octomap_occluded")
-            occluded_display = None
-            if isinstance(occluded_flag, bool):
-                occluded_display = occluded_flag
-            elif isinstance(occluded_flag, str):
-                lower = occluded_flag.strip().lower()
-                if lower in ("true", "false"):
-                    occluded_display = lower == "true"
-
+            occluded_display = _parse_bool_flag(status.get("octomap_occluded"))
             if occluded_display is None:
                 imgui.text("avatar_occluded=unknown")
             else:
                 occ_color = (
-                    (1.0, 0.45, 0.45, 1.0)
+                    (1.0, 0.6, 0.2, 1.0)
                     if occluded_display
                     else (0.7, 1.0, 0.7, 1.0)
                 )
                 imgui.text_colored(
                     occ_color,
                     f"avatar_occluded={str(occluded_display).lower()}",
+                )
+
+            in_obstacle_display = _parse_bool_flag(status.get("octomap_in_obstacle"))
+            if in_obstacle_display is None:
+                imgui.text("avatar_in_obstacle=unknown")
+            else:
+                inside_color = (
+                    (1.0, 0.35, 0.35, 1.0)
+                    if in_obstacle_display
+                    else (0.7, 1.0, 0.7, 1.0)
+                )
+                imgui.text_colored(
+                    inside_color,
+                    f"avatar_in_obstacle={str(in_obstacle_display).lower()}",
                 )
 
             imgui.spacing()
