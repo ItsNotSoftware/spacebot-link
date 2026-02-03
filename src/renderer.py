@@ -8,11 +8,14 @@ from typing import Optional, Tuple, List, Any
 
 from panda3d.core import (
     AmbientLight,
+    Camera,
     CardMaker,
     DirectionalLight,
     LineSegs,
     NodePath,
+    PerspectiveLens,
     Quat,
+    TextNode,
     Texture,
     TextureStage,
     Vec3,
@@ -55,6 +58,17 @@ from config import (
     CAMERA_FY,
     CAMERA_CX,
     CAMERA_CY,
+    ORIENT_PREVIEW_ENABLED,
+    ORIENT_PREVIEW_REGION,
+    ORIENT_PREVIEW_BG,
+    ORIENT_PREVIEW_CROP_TOP,
+    ORIENT_PREVIEW_MODEL,
+    ORIENT_PREVIEW_TARGET_SIZE,
+    ORIENT_PREVIEW_SPACING,
+    ORIENT_PREVIEW_CAMERA_DISTANCE,
+    ORIENT_PREVIEW_CAMERA_HEIGHT,
+    ORIENT_PREVIEW_ROBOT_COLOR,
+    ORIENT_PREVIEW_AVATAR_COLOR,
 )
 from utils import apply_opencv_intrinsics_to_lens, panda_pose_to_ros
 
@@ -84,7 +98,9 @@ class Renderer:
         self._anim_length: float = 0.0
         self.anim_instances: int = max(1, int(PATH_ANIM_INSTANCES))
         self.anim_line_enabled: bool = bool(PATH_ANIM_LINE_ENABLED)
-        self.path_mode: str = PATH_MODE_DEFAULT  # poses | poses_line | planes | animated
+        self.path_mode: str = (
+            PATH_MODE_DEFAULT  # poses | poses_line | planes | animated
+        )
         self.pose_stride: int = PATH_POSE_STRIDE
         self.line_stride: int = PATH_LINE_STRIDE
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
@@ -100,9 +116,17 @@ class Renderer:
         self._floor_shadow: Optional[NodePath] = None
         self._floor_line: Optional[NodePath] = None
         self._init_floor_indicator()
+        self._orient_region = None
+        self._orient_scene: Optional[NodePath] = None
+        self._orient_cam: Optional[NodePath] = None
+        self._orient_robot: Optional[NodePath] = None
+        self._orient_avatar: Optional[NodePath] = None
+        self._orient_enabled: bool = False
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
+        preview_model = self._resolve_asset_path(ORIENT_PREVIEW_MODEL)
+        self._init_orientation_preview(preview_model or model_path)
 
     # ---- lights / lens / background ----
     def _init_lights(self) -> None:
@@ -153,6 +177,176 @@ class Renderer:
         self.bg_card.setTexScale(ts, 1, -1)
         self.bg_card.setTexOffset(ts, 0, 1)
         self._update_bg_scale()
+
+    # ---- orientation preview ----
+    def _init_orientation_preview(self, model_path: Path) -> None:
+        """Create a small Panda3D preview window for robot/avatar orientation."""
+        if not ORIENT_PREVIEW_ENABLED:
+            return
+        if self.base.win is None:
+            return
+        try:
+            x0, x1, y0, y1 = ORIENT_PREVIEW_REGION
+        except Exception:
+            return
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        crop = max(0.0, float(ORIENT_PREVIEW_CROP_TOP))
+        if crop > 1e-6:
+            base_height = y1 - y0
+            base_width = x1 - x0
+            if base_height > 1e-6:
+                new_y1 = y1 - crop
+                new_height = new_y1 - y0
+                if new_height > 1e-6:
+                    aspect = base_width / base_height
+                    new_width = aspect * new_height
+                    mid_x = 0.5 * (x0 + x1)
+                    x0 = mid_x - 0.5 * new_width
+                    x1 = mid_x + 0.5 * new_width
+                    y1 = new_y1
+                    x0 = max(0.0, x0)
+                    x1 = min(1.0, x1)
+
+        try:
+            dr = self.base.win.makeDisplayRegion(x0, x1, y0, y1)
+        except Exception:
+            return
+        dr.setSort(20)
+        dr.setClearDepthActive(True)
+        dr.setClearColorActive(True)
+        dr.setClearColor(Vec4(*ORIENT_PREVIEW_BG))
+        self._orient_region = dr
+
+        scene = NodePath("orientation_scene")
+        self._orient_scene = scene
+        scene.setShaderAuto()
+
+        lens = PerspectiveLens()
+        lens.setFov(30.0)
+        lens.setNearFar(0.05, 50.0)
+        cam = Camera("orientation_cam", lens)
+        cam_np = scene.attachNewNode(cam)
+        dr.setCamera(cam_np)
+        self._orient_cam = cam_np
+
+        amb = AmbientLight("orientation_ambient")
+        amb.setColor(Vec4(0.55, 0.55, 0.55, 1.0))
+        amb_np = scene.attachNewNode(amb)
+        scene.setLight(amb_np)
+        sun = DirectionalLight("orientation_sun")
+        sun.setColor(Vec4(0.8, 0.8, 0.8, 1.0))
+        sun_np = scene.attachNewNode(sun)
+        sun_np.setHpr(45, -60, 0)
+        scene.setLight(sun_np)
+
+        try:
+            proto_model = self.base.loader.loadModel(str(model_path))
+        except Exception:
+            proto_model = None
+        if proto_model is None or proto_model.isEmpty():
+            return
+
+        container = NodePath("orientation_proto")
+        proto_model.reparentTo(container)
+
+        max_dim = 1.0
+        try:
+            bounds = proto_model.getTightBounds()
+            if bounds is not None and bounds[0] is not None and bounds[1] is not None:
+                mn, mx = bounds
+                cx = 0.5 * (mn.x + mx.x)
+                cy = 0.5 * (mn.y + mx.y)
+                cz = 0.5 * (mn.z + mx.z)
+                proto_model.setPos(-cx, -cy, -cz)
+                sx = float(mx.x - mn.x)
+                sy = float(mx.y - mn.y)
+                sz = float(mx.z - mn.z)
+                max_dim = max(1e-6, max(sx, sy, sz))
+        except Exception:
+            max_dim = 1.0
+
+        target = max(0.05, float(ORIENT_PREVIEW_TARGET_SIZE))
+        container.setScale(target / max_dim)
+        spacing = float(ORIENT_PREVIEW_SPACING) * target
+
+        robot_np = container.copyTo(scene)
+        avatar_np = container.copyTo(scene)
+        robot_np.setPos(-0.5 * spacing, 0.0, 0.0)
+        avatar_np.setPos(0.5 * spacing, 0.0, 0.0)
+        robot_np.setColorScale(*ORIENT_PREVIEW_ROBOT_COLOR)
+        avatar_np.setColorScale(*ORIENT_PREVIEW_AVATAR_COLOR)
+
+        self._orient_robot = robot_np
+        self._orient_avatar = avatar_np
+
+        sep_height = 1.6 * target
+        sep = LineSegs("orientation_separator")
+        sep.setThickness(2.5)
+        sep.setColor(0.7, 0.7, 0.7, 0.8)
+        sep.moveTo(0.0, 0.0, -0.5 * sep_height)
+        sep.drawTo(0.0, 0.0, 0.5 * sep_height)
+        sep_np = scene.attachNewNode(sep.create())
+        sep_np.setBin("fixed", 2)
+        sep_np.setDepthWrite(False)
+        sep_np.setDepthTest(False)
+
+        label_y = 0.0
+        label_z = 0.85 * target
+        label_scale = 0.22 * target
+
+        robot_label = TextNode("orientation_label_robot")
+        robot_label.setText("Robot")
+        robot_label.setAlign(TextNode.ACenter)
+        robot_label.setTextColor(1.0, 1.0, 1.0, 1.0)
+        robot_label_np = scene.attachNewNode(robot_label)
+        robot_label_np.setScale(label_scale)
+        robot_label_np.setPos(-0.5 * spacing, label_y, label_z)
+        robot_label_np.setBin("fixed", 3)
+        robot_label_np.setDepthWrite(False)
+        robot_label_np.setDepthTest(False)
+
+        avatar_label = TextNode("orientation_label_avatar")
+        avatar_label.setText("Avatar")
+        avatar_label.setAlign(TextNode.ACenter)
+        avatar_label.setTextColor(1.0, 1.0, 1.0, 1.0)
+        avatar_label_np = scene.attachNewNode(avatar_label)
+        avatar_label_np.setScale(label_scale)
+        avatar_label_np.setPos(0.5 * spacing, label_y, label_z)
+        avatar_label_np.setBin("fixed", 3)
+        avatar_label_np.setDepthWrite(False)
+        avatar_label_np.setDepthTest(False)
+
+        cam_dist = float(ORIENT_PREVIEW_CAMERA_DISTANCE) * target
+        cam_height = float(ORIENT_PREVIEW_CAMERA_HEIGHT) * target
+        cam_np.setPos(0.0, -cam_dist, cam_height)
+        cam_np.lookAt(0.0, 0.0, 0.35 * target)
+
+        self._orient_enabled = True
+
+    def update_orientation_preview(
+        self,
+        robot_hpr: Optional[Tuple[float, float, float]],
+        avatar_hpr: Optional[Tuple[float, float, float]],
+    ) -> None:
+        """Update preview models to show robot/avatar world-frame rotation."""
+        if not self._orient_enabled:
+            return
+        if self._orient_robot is not None:
+            if robot_hpr is None:
+                self._orient_robot.hide()
+            else:
+                self._orient_robot.show()
+                h, p, r = robot_hpr
+                self._orient_robot.setHpr(float(h), float(p) + 90, float(r) + 180)
+        if self._orient_avatar is not None:
+            if avatar_hpr is None:
+                self._orient_avatar.hide()
+            else:
+                self._orient_avatar.show()
+                h, p, r = avatar_hpr
+                self._orient_avatar.setHpr(float(h), float(p) + 90, float(r) + 180)
 
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""
@@ -484,9 +678,7 @@ class Renderer:
 
         fx, fy, fz = floor_pos
         self._floor_shadow.setPos(fx, fy, fz)
-        self._floor_shadow.lookAt(
-            self._floor_shadow.getPos() + Vec3(ax, ay, az)
-        )
+        self._floor_shadow.lookAt(self._floor_shadow.getPos() + Vec3(ax, ay, az))
         if FLOOR_SHADOW_FAR_DIST <= FLOOR_SHADOW_NEAR_DIST:
             scale = 1.0
         else:
@@ -628,7 +820,12 @@ class Renderer:
 
     def render_path_markers(self, poses: List[PoseTuple]) -> None:
         """Render path markers from a list of Panda3D (pos, hpr) tuples."""
-        if len(poses) < 3 and self.path_mode in ("poses", "poses_line", "animated", "planes"):
+        if len(poses) < 3 and self.path_mode in (
+            "poses",
+            "poses_line",
+            "animated",
+            "planes",
+        ):
             self._clear_path_vis()
             return
 

@@ -126,6 +126,7 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._camera_task, "CameraTask")
         self.taskMgr.add(self._pose_task, "PoseTask")
         self.taskMgr.add(self._keyboard_task, "KeyboardTask")
+        self.taskMgr.add(self._orientation_preview_task, "OrientationPreviewTask")
         self.taskMgr.add(self._metrics_task, "MetricsTask")
         self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
         self.taskMgr.add(self._path_task, "PathTask")
@@ -369,6 +370,14 @@ class SpacebotLinkApp(ShowBase):
     def _keyboard_task(self, task: PythonTask) -> int:
         """Handle keyboard-driven avatar/robot control."""
         self.input.poll()
+        return Task.cont
+
+    def _orientation_preview_task(self, task: PythonTask) -> int:
+        """Update the orientation preview models."""
+        robot_hpr = self.nav.state.last_robot_hpr
+        avatar_pose = self.renderer.get_avatar_pose()
+        avatar_hpr = avatar_pose[1] if avatar_pose else None
+        self.renderer.update_orientation_preview(robot_hpr, avatar_hpr)
         return Task.cont
 
     def _metrics_task(self, task: PythonTask) -> int:

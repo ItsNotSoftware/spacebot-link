@@ -82,6 +82,20 @@ FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
 PATH_QUALITY_CSV_ENABLED = True
 
+# Orientation preview (Panda3D overlay)
+ORIENT_PREVIEW_ENABLED = True
+# Display region: (left, right, bottom, top) in normalized window coords.
+ORIENT_PREVIEW_REGION = (-0.02, 0.22, 0.01, 0.25)
+ORIENT_PREVIEW_CROP_TOP = 0.07
+ORIENT_PREVIEW_BG = (0.05, 0.05, 0.08, 0.95)
+ORIENT_PREVIEW_MODEL = "../assets/space_cobot.glb"
+ORIENT_PREVIEW_TARGET_SIZE = 0.6
+ORIENT_PREVIEW_SPACING = 1.2  # multiplier of target size
+ORIENT_PREVIEW_CAMERA_DISTANCE = 4.5
+ORIENT_PREVIEW_CAMERA_HEIGHT = 0.85
+ORIENT_PREVIEW_ROBOT_COLOR = AVATAR_COLOR_VISIBLE
+ORIENT_PREVIEW_AVATAR_COLOR = AVATAR_COLOR_VISIBLE
+
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
 CAMERA_FORWARD_OFFSET_M = 0
 CAMERA_UP_OFFSET_M = 0.07
