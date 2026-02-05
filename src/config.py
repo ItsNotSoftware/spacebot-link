@@ -85,7 +85,7 @@ PATH_QUALITY_CSV_ENABLED = True
 # Orientation preview (Panda3D overlay)
 ORIENT_PREVIEW_ENABLED = True
 # Display region: (left, right, bottom, top) in normalized window coords.
-ORIENT_PREVIEW_REGION = (-0.02, 0.22, 0.01, 0.25)
+ORIENT_PREVIEW_REGION = (-0.02, 0.22, 0.01, 0.28)
 ORIENT_PREVIEW_CROP_TOP = 0.07
 ORIENT_PREVIEW_BG = (0.05, 0.05, 0.08, 0.95)
 ORIENT_PREVIEW_MODEL = "../assets/space_cobot.glb"
@@ -123,7 +123,7 @@ PITCH_UP_BUTTON = KeyboardButton.ascii_key("i")
 PITCH_DOWN_BUTTON = KeyboardButton.ascii_key("k")
 YAW_LEFT_BUTTON = KeyboardButton.ascii_key("u")
 YAW_RIGHT_BUTTON = KeyboardButton.ascii_key("o")
-ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("j")
-ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("l")
+ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("l")
+ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("j")
 RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
 RESET_TO_ROBOT_ORIENT_BUTTON = KeyboardButton.backspace()

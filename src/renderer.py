@@ -122,6 +122,7 @@ class Renderer:
         self._orient_robot: Optional[NodePath] = None
         self._orient_avatar: Optional[NodePath] = None
         self._orient_enabled: bool = False
+        self._orient_ros_axes_hpr = (90.0, 0.0, 0.0)  # ROS X->Panda Y, ROS Y->Panda -X
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -271,15 +272,30 @@ class Renderer:
         container.setScale(target / max_dim)
         spacing = float(ORIENT_PREVIEW_SPACING) * target
 
-        robot_np = container.copyTo(scene)
-        avatar_np = container.copyTo(scene)
-        robot_np.setPos(-0.5 * spacing, 0.0, 0.0)
-        avatar_np.setPos(0.5 * spacing, 0.0, 0.0)
-        robot_np.setColorScale(*ORIENT_PREVIEW_ROBOT_COLOR)
-        avatar_np.setColorScale(*ORIENT_PREVIEW_AVATAR_COLOR)
+        robot_anchor = scene.attachNewNode("orientation_robot_anchor")
+        avatar_anchor = scene.attachNewNode("orientation_avatar_anchor")
+        robot_anchor.setPos(-0.5 * spacing, 0.0, 0.0)
+        avatar_anchor.setPos(0.5 * spacing, 0.0, 0.0)
 
-        self._orient_robot = robot_np
-        self._orient_avatar = avatar_np
+        robot_axes = robot_anchor.attachNewNode("orientation_robot_axes")
+        avatar_axes = avatar_anchor.attachNewNode("orientation_avatar_axes")
+        robot_axes.setHpr(*self._orient_ros_axes_hpr)
+        avatar_axes.setHpr(*self._orient_ros_axes_hpr)
+
+        robot_offset = robot_axes.attachNewNode("orientation_robot_offset")
+        avatar_offset = avatar_axes.attachNewNode("orientation_avatar_offset")
+        robot_offset.setHpr(0.0, 0.0, 0.0)
+        avatar_offset.setHpr(0.0, 0.0, 0.0)
+
+        robot_pose = robot_offset.attachNewNode("orientation_robot_pose")
+        avatar_pose = avatar_offset.attachNewNode("orientation_avatar_pose")
+        container.copyTo(robot_pose)
+        container.copyTo(avatar_pose)
+        robot_pose.setColorScale(*ORIENT_PREVIEW_ROBOT_COLOR)
+        avatar_pose.setColorScale(*ORIENT_PREVIEW_AVATAR_COLOR)
+
+        self._orient_robot = robot_pose
+        self._orient_avatar = avatar_pose
 
         sep_height = 1.6 * target
         sep = LineSegs("orientation_separator")
@@ -333,20 +349,29 @@ class Renderer:
         """Update preview models to show robot/avatar world-frame rotation."""
         if not self._orient_enabled:
             return
+        # Models are parented under a fixed ROS-axes alignment node. To make the
+        # preview match the main scene's Panda-world HPR, we must compensate for
+        # that parent transform.
+        axes_quat = Quat()
+        axes_quat.setHpr(self._orient_ros_axes_hpr)
+        axes_inv = axes_quat.conjugate()
+
         if self._orient_robot is not None:
             if robot_hpr is None:
                 self._orient_robot.hide()
             else:
+                desired = Quat()
+                desired.setHpr(robot_hpr)
                 self._orient_robot.show()
-                h, p, r = robot_hpr
-                self._orient_robot.setHpr(float(h), float(p) + 90, float(r) + 180)
+                self._orient_robot.setQuat(axes_inv * desired)
         if self._orient_avatar is not None:
             if avatar_hpr is None:
                 self._orient_avatar.hide()
             else:
+                desired = Quat()
+                desired.setHpr(avatar_hpr)
                 self._orient_avatar.show()
-                h, p, r = avatar_hpr
-                self._orient_avatar.setHpr(float(h), float(p) + 90, float(r) + 180)
+                self._orient_avatar.setQuat(axes_inv * desired)
 
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""
