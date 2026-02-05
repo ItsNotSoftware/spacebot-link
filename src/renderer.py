@@ -361,7 +361,8 @@ class Renderer:
                 self._orient_robot.hide()
             else:
                 desired = Quat()
-                desired.setHpr(robot_hpr)
+                h, p, r = robot_hpr
+                desired.setHpr((h, -p, -r))
                 self._orient_robot.show()
                 self._orient_robot.setQuat(axes_inv * desired)
         if self._orient_avatar is not None:
@@ -369,7 +370,8 @@ class Renderer:
                 self._orient_avatar.hide()
             else:
                 desired = Quat()
-                desired.setHpr(avatar_hpr)
+                h, p, r = avatar_hpr
+                desired.setHpr((h, -p, -r))
                 self._orient_avatar.show()
                 self._orient_avatar.setQuat(axes_inv * desired)
 
