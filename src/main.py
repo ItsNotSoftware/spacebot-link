@@ -374,10 +374,10 @@ class SpacebotLinkApp(ShowBase):
 
     def _orientation_preview_task(self, task: PythonTask) -> int:
         """Update the orientation preview models."""
-        robot_hpr = self.nav.state.last_robot_hpr
+        robot_ros_orientation = self.nav.state.last_ros_orientation
         avatar_pose = self.renderer.get_avatar_pose()
         avatar_hpr = avatar_pose[1] if avatar_pose else None
-        self.renderer.update_orientation_preview(robot_hpr, avatar_hpr)
+        self.renderer.update_orientation_preview(robot_ros_orientation, avatar_hpr)
         return Task.cont
 
     def _metrics_task(self, task: PythonTask) -> int:
