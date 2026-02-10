@@ -287,8 +287,20 @@ class Renderer:
 
         cam_dist = float(ORIENT_PREVIEW_CAMERA_DISTANCE) * target
         cam_height = float(ORIENT_PREVIEW_CAMERA_HEIGHT) * target
-        cam_np.setPos(0.0, -cam_dist, cam_height)
-        cam_np.lookAt(0.0, 0.0, 0.35 * target)
+        center = Vec3(0.0, 0.0, 0.0)
+        try:
+            bounds = container.getTightBounds()
+            if bounds is not None and bounds[0] is not None and bounds[1] is not None:
+                mn, mx = bounds
+                center = Vec3(
+                    0.5 * (mn.x + mx.x),
+                    0.5 * (mn.y + mx.y),
+                    0.5 * (mn.z + mx.z),
+                )
+        except Exception:
+            center = Vec3(0.0, 0.0, 0.0)
+        cam_np.setPos(center.x, center.y - cam_dist, center.z + cam_height)
+        cam_np.lookAt(center)
 
         self._orient_enabled = True
 
