@@ -252,11 +252,21 @@ static std::string handle_request(const std::string &request_json,
         }
     }
 
+    // Check whether the avatar is inside an occupied voxel.
+    bool avatar_in_obstacle = false;
+    if (auto node = tree.search(avatar_pose.position.x, avatar_pose.position.y,
+                                avatar_pose.position.z)) {
+        if (tree.isNodeOccupied(node)) {
+            avatar_in_obstacle = true;
+        }
+    }
+
     // Assemble JSON response.
     boost::property_tree::ptree response;
     response.put("ground_distance", ground_distance);
     response.put("ground_axis", axis_names[best_axis]);
     response.put("avatar_occluded", avatar_occluded);
+    response.put("avatar_in_obstacle", avatar_in_obstacle);
 
     std::ostringstream out;
     boost::property_tree::write_json(out, response, false);

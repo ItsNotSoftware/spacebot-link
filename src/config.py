@@ -24,7 +24,9 @@ OCTOMAP_SERVER_MAX_RANGE = 50.0
 OCTOMAP_QUERY_PERIOD_S = 0.1
 AVATAR_ALPHA_VISIBLE = 0.85
 AVATAR_COLOR_VISIBLE = (1.0, 1.0, 1.0, AVATAR_ALPHA_VISIBLE)
-AVATAR_COLOR_OCCLUDED = (1.0, 0.0, 0.0, AVATAR_ALPHA_VISIBLE)
+# Orange when occluded but reachable, red when inside an obstacle.
+AVATAR_COLOR_OCCLUDED = (1.0, 0.55, 0.1, AVATAR_ALPHA_VISIBLE)
+AVATAR_COLOR_IN_OBSTACLE = (1.0, 0.0, 0.0, AVATAR_ALPHA_VISIBLE)
 
 # ROS topics used by the bridge
 TOPIC_IMAGE = "/main_camera/image"
@@ -80,6 +82,19 @@ FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
 PATH_QUALITY_CSV_ENABLED = False
 
+# Orientation preview (Panda3D overlay)
+ORIENT_PREVIEW_ENABLED = True
+# Display region: (left, right, bottom, top) in normalized window coords.
+ORIENT_PREVIEW_REGION = (-0.02, 0.16, 0.02, 0.22)
+ORIENT_PREVIEW_CROP_TOP = 0.07
+ORIENT_PREVIEW_BG = (0.05, 0.05, 0.08, 0.95)
+ORIENT_PREVIEW_MODEL = "../assets/space_cobot.glb"
+ORIENT_PREVIEW_TARGET_SIZE = 1.0
+ORIENT_PREVIEW_CAMERA_DISTANCE = 2.5
+ORIENT_PREVIEW_CAMERA_HEIGHT = 0.0
+ORIENT_PREVIEW_AVATAR_COLOR = AVATAR_COLOR_VISIBLE
+ORIENT_PREVIEW_EXTRA_YAW_DEG = 90.0
+
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
 CAMERA_FORWARD_OFFSET_M = 0
 CAMERA_UP_OFFSET_M = 0.07
@@ -107,7 +122,7 @@ PITCH_UP_BUTTON = KeyboardButton.ascii_key("i")
 PITCH_DOWN_BUTTON = KeyboardButton.ascii_key("k")
 YAW_LEFT_BUTTON = KeyboardButton.ascii_key("u")
 YAW_RIGHT_BUTTON = KeyboardButton.ascii_key("o")
-ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("j")
-ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("l")
+ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("l")
+ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("j")
 RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
 RESET_TO_ROBOT_ORIENT_BUTTON = KeyboardButton.backspace()

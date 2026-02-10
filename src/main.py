@@ -38,6 +38,7 @@ from config import (
     OCTOMAP_QUERY_PERIOD_S,
     AVATAR_COLOR_VISIBLE,
     AVATAR_COLOR_OCCLUDED,
+    AVATAR_COLOR_IN_OBSTACLE,
     FLOOR_PROJECTION_ENABLED,
     AVATAR_AUTO_RESET_DISTANCE,
     AVATAR_AUTO_RESET_DELAY_S,
@@ -115,7 +116,7 @@ class SpacebotLinkApp(ShowBase):
         self._octomap_context = zmq.Context.instance()
         self._last_octomap: Optional[Dict[str, Any]] = None
         self._last_octomap_raw: Optional[str] = None
-        self._last_occluded: Optional[bool] = None
+        self._last_avatar_state: Optional[Tuple[Optional[bool], Optional[bool]]] = None
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -125,6 +126,7 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._camera_task, "CameraTask")
         self.taskMgr.add(self._pose_task, "PoseTask")
         self.taskMgr.add(self._keyboard_task, "KeyboardTask")
+        self.taskMgr.add(self._orientation_preview_task, "OrientationPreviewTask")
         self.taskMgr.add(self._metrics_task, "MetricsTask")
         self.taskMgr.add(self._goal_publish_task, "GoalPublishTask")
         self.taskMgr.add(self._path_task, "PathTask")
@@ -340,27 +342,42 @@ class SpacebotLinkApp(ShowBase):
 
         self._last_floor_height = ground_distance
 
-        occluded = response.get("avatar_occluded")
-        occluded_bool: Optional[bool]
-        if isinstance(occluded, bool):
-            occluded_bool = occluded
-        elif isinstance(occluded, str):
-            occluded_lower = occluded.strip().lower()
-            if occluded_lower in ("true", "false"):
-                occluded_bool = occluded_lower == "true"
-            else:
-                occluded_bool = None
-        else:
-            occluded_bool = None
+        def _parse_bool(value: Any) -> Optional[bool]:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in ("true", "false"):
+                    return lowered == "true"
+            return None
 
-        if occluded_bool is not None and occluded_bool != self._last_occluded:
-            color = AVATAR_COLOR_OCCLUDED if occluded_bool else AVATAR_COLOR_VISIBLE
-            self.renderer.set_avatar_color(color)
-            self._last_occluded = occluded_bool
+        occluded_bool = _parse_bool(response.get("avatar_occluded"))
+        in_obstacle_bool = _parse_bool(response.get("avatar_in_obstacle"))
+
+        desired_color = None
+        if in_obstacle_bool is True:
+            desired_color = AVATAR_COLOR_IN_OBSTACLE
+        elif occluded_bool is True:
+            desired_color = AVATAR_COLOR_OCCLUDED
+        elif in_obstacle_bool is False or occluded_bool is False:
+            desired_color = AVATAR_COLOR_VISIBLE
+
+        state_key = (in_obstacle_bool, occluded_bool)
+        if desired_color is not None and state_key != self._last_avatar_state:
+            self.renderer.set_avatar_color(desired_color)
+            self._last_avatar_state = state_key
 
     def _keyboard_task(self, task: PythonTask) -> int:
         """Handle keyboard-driven avatar/robot control."""
         self.input.poll()
+        return Task.cont
+
+    def _orientation_preview_task(self, task: PythonTask) -> int:
+        """Update the orientation preview models."""
+        robot_ros_orientation = self.nav.state.last_ros_orientation
+        avatar_pose = self.renderer.get_avatar_pose()
+        avatar_hpr = avatar_pose[1] if avatar_pose else None
+        self.renderer.update_orientation_preview(robot_ros_orientation, avatar_hpr)
         return Task.cont
 
     def _metrics_task(self, task: PythonTask) -> int:
@@ -548,6 +565,11 @@ class SpacebotLinkApp(ShowBase):
             ),
             "octomap_occluded": (
                 self._last_octomap.get("avatar_occluded")
+                if self._last_octomap
+                else None
+            ),
+            "octomap_in_obstacle": (
+                self._last_octomap.get("avatar_in_obstacle")
                 if self._last_octomap
                 else None
             ),
