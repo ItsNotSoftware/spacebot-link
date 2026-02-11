@@ -15,6 +15,7 @@ from panda3d.core import PerspectiveLens, Quat, Vec3
 __all__ = [
     "apply_opencv_intrinsics_to_lens",
     "ros_orientation_to_panda_hpr",
+    "ros_orientation_to_panda_quat",
     "ros_position_to_panda_pos",
     "ros_vector_to_panda",
     "ros_pose_to_panda_pos_hpr",
@@ -106,6 +107,25 @@ def ros_orientation_to_panda_hpr(
     quat.set(*q_panda)
     h, p, r = quat.getHpr()
     return float(h), float(p), float(r)
+
+
+def ros_orientation_to_panda_quat(orientation: Dict[str, Any]) -> Optional[Quat]:
+    """Convert a ROS geometry_msgs/Quaternion into a Panda3D Quat."""
+    try:
+        qx = float(orientation.get("x"))
+        qy = float(orientation.get("y"))
+        qz = float(orientation.get("z"))
+        qw = float(orientation.get("w"))
+    except (TypeError, ValueError):
+        return None
+
+    q_ros = (qw, qx, qy, qz)
+    q_panda = _quat_multiply(
+        _quat_multiply(_ROS_TO_PANDA_ROT, q_ros), _quat_conjugate(_ROS_TO_PANDA_ROT)
+    )
+    quat = Quat()
+    quat.set(*q_panda)
+    return quat
 
 
 def ros_position_to_panda_pos(
