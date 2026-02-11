@@ -72,6 +72,7 @@ from utils import (
     apply_opencv_intrinsics_to_lens,
     panda_pose_to_ros,
     ros_orientation_to_panda_hpr,
+    ros_orientation_to_panda_quat,
 )
 
 PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -277,7 +278,8 @@ class Renderer:
         preview_axes.setHpr(*self._orient_ros_axes_hpr)
 
         preview_offset = preview_axes.attachNewNode("orientation_preview_offset")
-        preview_offset.setHpr(0.0, 0.0, 0.0)
+        # Rotate preview frame to align pitch/roll axes with avatar controls.
+        preview_offset.setHpr(90.0, 0.0, 0.0)
 
         preview_pose = preview_offset.attachNewNode("orientation_preview_pose")
         container.copyTo(preview_pose)
@@ -369,7 +371,7 @@ class Renderer:
             return
 
         relative_q = _quat_multiply(_quat_conjugate(robot_q), avatar_q)
-        rel_hpr = ros_orientation_to_panda_hpr(
+        rel_quat = ros_orientation_to_panda_quat(
             {
                 "x": relative_q[1],
                 "y": relative_q[2],
@@ -377,15 +379,16 @@ class Renderer:
                 "w": relative_q[0],
             }
         )
-        if rel_hpr is None:
+        if rel_quat is None:
             self._orient_preview.hide()
             return
-        h, p, r = rel_hpr
-        rel_hpr = (float(h), float(r), -float(p))
-        desired = Quat()
-        desired.setHpr(rel_hpr)
+        desired = rel_quat
         self._orient_preview.show()
-        self._orient_preview.setQuat(axes_inv * desired)
+        rel = axes_inv * desired
+        h, p, r = rel.getHpr()
+        fixed = Quat()
+        fixed.setHpr((float(h), float(p), float(-r)))
+        self._orient_preview.setQuat(fixed)
 
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""
