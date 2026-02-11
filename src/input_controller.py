@@ -29,7 +29,8 @@ from config import (
     GAMEPAD_AXIS_R2,
     GAMEPAD_AXIS_RIGHT_X,
     GAMEPAD_AXIS_RIGHT_Y,
-    GAMEPAD_AXIS_LOCK_RATIO,
+    GAMEPAD_AXIS_LOCK_RATIO_LEFT,
+    GAMEPAD_AXIS_LOCK_RATIO_RIGHT,
     GAMEPAD_BUTTON_L1,
     GAMEPAD_BUTTON_R1,
     GAMEPAD_BUTTON_ABORT,
@@ -551,7 +552,7 @@ class InputController:
         ly = self._axis_value(gp, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_INDEX_LEFT_Y)
         lx = self._move_filter_x.apply(lx) * GAMEPAD_MOVE_SCALE
         ly = self._move_filter_y.apply(ly) * GAMEPAD_MOVE_SCALE
-        lx, ly = self._axis_lock(lx, ly)
+        lx, ly = self._axis_lock(lx, ly, GAMEPAD_AXIS_LOCK_RATIO_LEFT)
         lx, ly = self._normalize_pair(lx, ly)
         return lx, ly
 
@@ -560,7 +561,7 @@ class InputController:
         ry = self._axis_value(gp, GAMEPAD_AXIS_RIGHT_Y, GAMEPAD_AXIS_INDEX_RIGHT_Y)
         rx = self._look_filter_x.apply(rx) * GAMEPAD_LOOK_SCALE
         ry = self._look_filter_y.apply(ry) * GAMEPAD_LOOK_SCALE
-        rx, ry = self._axis_lock(rx, ry)
+        rx, ry = self._axis_lock(rx, ry, GAMEPAD_AXIS_LOCK_RATIO_RIGHT)
         rx, ry = self._normalize_pair(rx, ry)
         if GAMEPAD_INVERT_ROLL:
             rx = -rx
@@ -604,8 +605,8 @@ class InputController:
             self._log_button_press(device)
         return pressed and not prev
 
-    def _axis_lock(self, x: float, y: float) -> tuple[float, float]:
-        ratio = float(GAMEPAD_AXIS_LOCK_RATIO)
+    def _axis_lock(self, x: float, y: float, ratio: float) -> tuple[float, float]:
+        ratio = float(ratio)
         ax = abs(x)
         ay = abs(y)
         if ax == 0.0 and ay == 0.0:
