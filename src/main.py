@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 from typing import Any, Dict, Optional, Sequence, List, Tuple
 
 from panda3d.core import loadPrcFileData, PythonTask
@@ -43,6 +44,9 @@ from config import (
     AVATAR_AUTO_RESET_DISTANCE,
     AVATAR_AUTO_RESET_DELAY_S,
     AVATAR_HIDE_DISTANCE,
+    GAMEPAD_REMOTE_AUTOSTART,
+    GAMEPAD_REMOTE_ENDPOINT,
+    GAMEPAD_REMOTE_TOPIC,
 )
 from utils import (
     extract_ros_pose,
@@ -97,7 +101,14 @@ class SpacebotLinkApp(ShowBase):
         # Expose for UI FOV bumps
         self._update_bg_scale = self.renderer.update_bg_scale
         self.nav = Navigation(self.cmd_pub, self.taskMgr)
-        self.input = InputController(self, self.renderer, self.nav, self.cmd_pub)
+        self.input = InputController(
+            self,
+            self.renderer,
+            self.nav,
+            self.cmd_pub,
+            on_abort=self._abort_to_robot_pose,
+            on_toggle_mode=self._toggle_ui_mode,
+        )
 
         # metrics
         self._fps_samples = deque(maxlen=120)
@@ -113,6 +124,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_exec_summary_by_topic: Dict[str, Dict[str, Any]] = {}
         self._octomap_proc: Optional[subprocess.Popen] = None
         self._octomap_socket: Optional[zmq.Socket] = None
+        self._gamepad_proc: Optional[subprocess.Popen] = None
         self._octomap_context = zmq.Context.instance()
         self._last_octomap: Optional[Dict[str, Any]] = None
         self._last_octomap_raw: Optional[str] = None
@@ -142,6 +154,7 @@ class SpacebotLinkApp(ShowBase):
 
         self._start_octomap_process()
         self._init_octomap_socket()
+        self._start_gamepad_remote_process()
         self.renderer.set_avatar_color(AVATAR_COLOR_VISIBLE)
 
     # ---- tasks ----
@@ -215,6 +228,33 @@ class SpacebotLinkApp(ShowBase):
             )
         except Exception as ex:
             print(f"[octomap] Failed to start process: {ex}")
+
+    def _start_gamepad_remote_process(self) -> None:
+        if not (
+            GAMEPAD_REMOTE_AUTOSTART or os.getenv("GAMEPAD_REMOTE_AUTOSTART") == "1"
+        ):
+            return
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script_path = os.path.abspath(
+            os.path.join(root_dir, "src", "gamepad_daemon.py")
+        )
+        if not os.path.isfile(script_path):
+            print(f"[gamepad] daemon not found: {script_path}")
+            return
+        if self._gamepad_proc is not None and self._gamepad_proc.poll() is None:
+            return
+        env = os.environ.copy()
+        env.setdefault("GAMEPAD_REMOTE", "1")
+        env.setdefault("GAMEPAD_REMOTE_ENDPOINT", GAMEPAD_REMOTE_ENDPOINT)
+        env.setdefault("GAMEPAD_REMOTE_TOPIC", GAMEPAD_REMOTE_TOPIC)
+        try:
+            self._gamepad_proc = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+            )
+        except Exception as ex:
+            print(f"[gamepad] Failed to start remote process: {ex}")
 
     def _init_octomap_socket(self) -> None:
         sock = self._octomap_context.socket(zmq.REQ)
@@ -368,7 +408,7 @@ class SpacebotLinkApp(ShowBase):
             self._last_avatar_state = state_key
 
     def _keyboard_task(self, task: PythonTask) -> int:
-        """Handle keyboard-driven avatar/robot control."""
+        """Handle keyboard/gamepad-driven avatar/robot control."""
         self.input.poll()
         return Task.cont
 
@@ -454,7 +494,9 @@ class SpacebotLinkApp(ShowBase):
             self._last_exec_summary_by_topic[topic] = summary
             if not self._last_path_quality:
                 continue
-            header, line = self._format_path_quality_csv(self._last_path_quality, summary)
+            header, line = self._format_path_quality_csv(
+                self._last_path_quality, summary
+            )
             if line:
                 print(header)
                 print(line)
@@ -620,6 +662,13 @@ class SpacebotLinkApp(ShowBase):
             return
         self.ui.set_mode("Follow Mode")
         self.nav.set_mode("Follow Mode")
+
+    def _toggle_ui_mode(self) -> None:
+        """Toggle between Goal and Follow modes."""
+        if self.ui.mode == "Goal Mode":
+            self._activate_follow_mode()
+        else:
+            self._activate_goal_mode()
         self.nav.set_follow_seed(self.renderer.get_avatar_pose())
         self._last_path_poses = []
         self._rerender_path()
@@ -766,6 +815,11 @@ class SpacebotLinkApp(ShowBase):
         try:
             if self._octomap_proc is not None:
                 self._octomap_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self._gamepad_proc is not None:
+                self._gamepad_proc.terminate()
         except Exception:
             pass
         self.renderer.clear_path_markers()
