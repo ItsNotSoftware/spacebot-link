@@ -43,8 +43,8 @@ TOPIC_PATH_EXEC_SUMMARY_VEL = "/nav6d/velocity_controller/path_execution_summary
 TOPIC_PATH_EXEC_SUMMARY_FORCE = "/nav6d/force_controller/path_execution_summary"
 
 # Speeds and thresholds
-MOVE_SPEED = 1.2
-ROTATE_SPEED = 1.0
+MOVE_SPEED = 2.0
+ROTATE_SPEED = 1.2
 FOLLOW_POS_EPS = 0.02
 FOLLOW_HPR_EPS = 1.0
 FOLLOW_REACHED_THRESH = 0.2
@@ -127,11 +127,24 @@ ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("j")
 RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
 RESET_TO_ROBOT_ORIENT_BUTTON = KeyboardButton.backspace()
 
-# Gamepad bindings (Panda3D InputDevice lookup)
+# Gamepad control tuning (daemon input)
 GAMEPAD_ENABLED = True
-GAMEPAD_DEADZONE = 0.22
-GAMEPAD_AXIS_LOCK_RATIO = 0.25
+GAMEPAD_MOVE_DEADZONE = 0.22
+GAMEPAD_LOOK_DEADZONE = 0.20
 GAMEPAD_TRIGGER_DEADZONE = 0.05
+GAMEPAD_MOVE_CURVE = 1.6
+GAMEPAD_LOOK_CURVE = 1.8
+GAMEPAD_MOVE_SMOOTHING = 0.2
+GAMEPAD_LOOK_SMOOTHING = 0.25
+GAMEPAD_TRIGGER_SMOOTHING = 0.2
+GAMEPAD_MOVE_SCALE = 1.0
+GAMEPAD_LOOK_SCALE = 1.0
+GAMEPAD_AXIS_LOCK_RATIO = 0.25
+GAMEPAD_INVERT_PITCH = False
+GAMEPAD_INVERT_ROLL = False
+GAMEPAD_AUTOSCALE_MIN = 0.35
+GAMEPAD_AUTOSCALE_MAX_GAIN = 3.0
+GAMEPAD_AUTOSCALE_DECAY = 0.98
 
 # Remote gamepad (external process -> ZMQ)
 GAMEPAD_REMOTE_ENABLED = True
@@ -140,13 +153,13 @@ GAMEPAD_REMOTE_ENDPOINT = "tcp://127.0.0.1:5580"
 GAMEPAD_REMOTE_TOPIC = "/gamepad/state"
 GAMEPAD_REMOTE_TIMEOUT_S = 1.0
 
-# Axis names are resolved via getattr(InputDevice.Axis, name).
-GAMEPAD_AXIS_LEFT_X = ("left_x", "lx", "x", "abs_x")
-GAMEPAD_AXIS_LEFT_Y = ("left_y", "ly", "y", "abs_y")
+# Axis names are resolved against daemon-published axes.
+GAMEPAD_AXIS_LEFT_X = ("left_x", "lx", "abs_x")
+GAMEPAD_AXIS_LEFT_Y = ("left_y", "ly", "abs_y")
 GAMEPAD_AXIS_RIGHT_X = ("right_x", "rx", "abs_rx")
 GAMEPAD_AXIS_RIGHT_Y = ("right_y", "ry", "abs_ry")
-GAMEPAD_AXIS_L2 = ("left_trigger", "trigger_left", "lt", "z", "abs_z")
-GAMEPAD_AXIS_R2 = ("right_trigger", "trigger_right", "rt", "rz", "abs_rz")
+GAMEPAD_AXIS_L2 = ("left_trigger", "lt", "abs_z", "abs_l2")
+GAMEPAD_AXIS_R2 = ("right_trigger", "rt", "abs_rz", "abs_r2")
 
 # Optional index fallbacks when axis names are unavailable.
 # Set to integers (0-based) or None.
@@ -157,12 +170,14 @@ GAMEPAD_AXIS_INDEX_RIGHT_Y = 3
 GAMEPAD_AXIS_INDEX_L2 = 4
 GAMEPAD_AXIS_INDEX_R2 = 5
 
-# Button names are resolved via getattr(InputDevice.Button, name).
+# Button names are resolved against daemon-published buttons.
 GAMEPAD_BUTTON_L1 = ("left_shoulder", "l1")
 GAMEPAD_BUTTON_R1 = ("right_shoulder", "r1")
 GAMEPAD_BUTTON_X = ("face_a", "south", "cross")
 GAMEPAD_BUTTON_TRIANGLE = ("face_y", "north", "triangle")
 GAMEPAD_BUTTON_TOUCHPAD = ("touchpad",)
+GAMEPAD_BUTTON_ABORT = ("face_b", "east", "circle")
+GAMEPAD_BUTTON_INDEX_ABORT = 1
 
 # Optional index fallbacks when button names are unavailable.
 GAMEPAD_BUTTON_INDEX_L1 = 4

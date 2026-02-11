@@ -1,94 +1,122 @@
-"""External gamepad reader that publishes normalized state over ZMQ."""
+"""Gamepad daemon: read inputs, normalize, publish state over ZMQ."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import time
-from typing import Dict, Tuple
+from typing import Dict
 
 import zmq
 
 try:
     from inputs import get_gamepad
 except Exception as exc:  # pragma: no cover - runtime guard
-    raise SystemExit(
-        "inputs library not available. Install with: uv add inputs"
-    ) from exc
+    raise SystemExit("inputs library not available. Install with: uv add inputs") from exc
 
-from config import (
-    GAMEPAD_REMOTE_ENDPOINT,
-    GAMEPAD_REMOTE_TOPIC,
-)
+from config import GAMEPAD_REMOTE_ENDPOINT, GAMEPAD_REMOTE_TOPIC
 
 STICK_AXES = {
-    "ABS_X": ("left_x", 0),
-    "ABS_Y": ("left_y", 1),
-    "ABS_LX": ("left_x", 0),
-    "ABS_LY": ("left_y", 1),
-    "ABS_RX": ("right_x", 2),
-    "ABS_RY": ("right_y", 3),
+    "ABS_X": "left_x",
+    "ABS_Y": "left_y",
+    "ABS_LX": "left_x",
+    "ABS_LY": "left_y",
+    "ABS_RX": "right_x",
+    "ABS_RY": "right_y",
 }
 
 TRIGGER_AXES = {
-    "ABS_Z": ("left_trigger", 4),
-    "ABS_RZ": ("right_trigger", 5),
+    "ABS_Z": "left_trigger",
+    "ABS_RZ": "right_trigger",
+    "ABS_LT": "left_trigger",
+    "ABS_RT": "right_trigger",
+    "ABS_L2": "left_trigger",
+    "ABS_R2": "right_trigger",
+}
+
+DPAD_AXES = {
+    "ABS_HAT0X": "dpad_x",
+    "ABS_HAT0Y": "dpad_y",
 }
 
 BUTTONS = {
-    "BTN_TL": ("left_shoulder", 4),
-    "BTN_TR": ("right_shoulder", 5),
-    "BTN_SOUTH": ("face_a", 0),
-    "BTN_NORTH": ("face_y", 3),
-    "BTN_SELECT": ("touchpad", 13),
-    "BTN_TOUCHPAD": ("touchpad", 13),
-    "BTN_MODE": ("touchpad", 13),
+    "BTN_TL": "left_shoulder",
+    "BTN_TR": "right_shoulder",
+    "BTN_SOUTH": "face_a",
+    "BTN_EAST": "face_b",
+    "BTN_NORTH": "face_y",
+    "BTN_WEST": "face_x",
+    "BTN_SELECT": "touchpad",
+    "BTN_MODE": "touchpad",
+    "BTN_TOUCHPAD": "touchpad",
 }
 
-AXIS_RANGE_MIN = 6
+AXIS_INDEX = {
+    "left_x": 0,
+    "left_y": 1,
+    "right_x": 2,
+    "right_y": 3,
+    "left_trigger": 4,
+    "right_trigger": 5,
+    "dpad_x": 6,
+    "dpad_y": 7,
+}
+
+BUTTON_INDEX = {
+    "face_a": 0,
+    "face_b": 1,
+    "face_x": 2,
+    "face_y": 3,
+    "left_shoulder": 4,
+    "right_shoulder": 5,
+    "touchpad": 13,
+}
+
 AXIS_CENTER_UPDATE_BAND = 4
-_axis_cal: Dict[str, Tuple[float, float]] = {}
+AXIS_RANGE_MIN = 8
+_axis_cal: Dict[str, tuple[float, float]] = {}
 
 
-def _norm_signed(value: int) -> float:
-    if -1 <= value <= 1:
-        return float(value)
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _norm_stick(value: int) -> float:
     if -32768 <= value <= 32767:
-        return max(-1.0, min(1.0, value / 32767.0))
+        return _clamp(value / 32767.0, -1.0, 1.0)
     if 0 <= value <= 255:
-        return max(-1.0, min(1.0, (value - 128) / 128.0))
+        return _clamp((value - 128.0) / 127.0, -1.0, 1.0)
     if 0 <= value <= 1023:
-        return max(-1.0, min(1.0, (value - 512) / 512.0))
+        return _clamp((value - 512.0) / 512.0, -1.0, 1.0)
     if 0 <= value <= 65535:
-        return max(-1.0, min(1.0, (value - 32768) / 32768.0))
-    # Fallback: scale by a large constant to avoid huge values.
-    return max(-1.0, min(1.0, float(value) / 32767.0))
+        return _clamp((value - 32768.0) / 32767.0, -1.0, 1.0)
+    return _clamp(value / 32767.0, -1.0, 1.0)
 
 
-def _norm_signed_calibrated(code: str, value: int) -> float:
+def _norm_stick_calibrated(code: str, value: int) -> float:
     if not (0 <= value <= 255):
-        return _norm_signed(value)
-    center, max_dev = _axis_cal.get(code, (float(value), 0.0))
+        return _norm_stick(value)
+    center, peak = _axis_cal.get(code, (float(value), 0.0))
     if abs(value - center) <= AXIS_CENTER_UPDATE_BAND:
         center = (center * 0.98) + (value * 0.02)
     dev = abs(value - center)
-    if dev > max_dev:
-        max_dev = dev
-    _axis_cal[code] = (center, max_dev)
-    denom = max(max_dev, float(AXIS_RANGE_MIN))
-    return max(-1.0, min(1.0, (value - center) / denom))
+    if dev > peak:
+        peak = dev
+    _axis_cal[code] = (center, peak)
+    denom = max(peak, float(AXIS_RANGE_MIN))
+    return _clamp((value - center) / denom, -1.0, 1.0)
 
 
 def _norm_trigger(value: int) -> float:
     if 0 <= value <= 255:
-        return value / 255.0
+        return _clamp(value / 255.0, 0.0, 1.0)
     if 0 <= value <= 1023:
-        return value / 1023.0
+        return _clamp(value / 1023.0, 0.0, 1.0)
     if -32768 <= value <= 32767:
-        return max(0.0, min(1.0, (value + 32768.0) / 65535.0))
+        return _clamp((value + 32768.0) / 65535.0, 0.0, 1.0)
     if 0 <= value <= 65535:
-        return value / 65535.0
-    return max(0.0, min(1.0, float(value) / 255.0))
+        return _clamp(value / 65535.0, 0.0, 1.0)
+    return _clamp(value / 255.0, 0.0, 1.0)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -143,34 +171,37 @@ def main() -> int:
                 print(f"[gamepad-daemon] {ev.ev_type} {ev.code} {ev.state}")
             if ev.ev_type == "Absolute":
                 if ev.code in STICK_AXES:
-                    name, idx = STICK_AXES[ev.code]
-                    val = _norm_signed_calibrated(ev.code, int(ev.state))
-                    axes[name] = val
-                    if 0 <= idx < len(axes_list):
-                        axes_list[idx] = val
-                    changed = True
+                    name = STICK_AXES[ev.code]
+                    val = _norm_stick_calibrated(ev.code, int(ev.state))
                 elif ev.code in TRIGGER_AXES:
-                    name, idx = TRIGGER_AXES[ev.code]
+                    name = TRIGGER_AXES[ev.code]
                     val = _norm_trigger(int(ev.state))
-                    axes[name] = val
-                    if 0 <= idx < len(axes_list):
-                        axes_list[idx] = val
+                elif ev.code in DPAD_AXES:
+                    name = DPAD_AXES[ev.code]
+                    val = _clamp(float(ev.state), -1.0, 1.0)
+                else:
+                    name = None
+                    val = None
+                if name is not None and val is not None:
+                    axes[name] = float(val)
+                    idx = AXIS_INDEX.get(name)
+                    if idx is not None and 0 <= idx < len(axes_list):
+                        axes_list[idx] = float(val)
                     changed = True
-                # Always publish raw ABS_* names as fallback
                 if ev.code.startswith("ABS_"):
-                    code_name = ev.code.lower()
                     if ev.code in TRIGGER_AXES:
                         raw_val = _norm_trigger(int(ev.state))
                     else:
-                        raw_val = _norm_signed(int(ev.state))
-                    axes[code_name] = raw_val
+                        raw_val = _norm_stick(int(ev.state))
+                    axes[ev.code.lower()] = raw_val
                     changed = True
             elif ev.ev_type == "Key":
                 if ev.code in BUTTONS:
-                    name, idx = BUTTONS[ev.code]
+                    name = BUTTONS[ev.code]
                     val = bool(ev.state)
                     buttons[name] = val
-                    if 0 <= idx < len(buttons_list):
+                    idx = BUTTON_INDEX.get(name)
+                    if idx is not None and 0 <= idx < len(buttons_list):
                         buttons_list[idx] = 1 if val else 0
                     changed = True
 
