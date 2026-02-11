@@ -85,7 +85,7 @@ PATH_QUALITY_CSV_ENABLED = False
 # Orientation preview (Panda3D overlay)
 ORIENT_PREVIEW_ENABLED = True
 # Display region: (left, right, bottom, top) in normalized window coords.
-ORIENT_PREVIEW_REGION = (0.02, 0.22, 0.78, 0.98)
+ORIENT_PREVIEW_REGION = (-0.02, 0.20, 0.76, 1.04)
 ORIENT_PREVIEW_CROP_TOP = 0.07
 ORIENT_PREVIEW_BG = (0.05, 0.05, 0.08, 0.95)
 ORIENT_PREVIEW_MODEL = "../assets/space_cobot.glb"
