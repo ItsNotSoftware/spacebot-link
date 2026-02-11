@@ -85,7 +85,7 @@ PATH_QUALITY_CSV_ENABLED = False
 # Orientation preview (Panda3D overlay)
 ORIENT_PREVIEW_ENABLED = True
 # Display region: (left, right, bottom, top) in normalized window coords.
-ORIENT_PREVIEW_REGION = (-0.02, 0.16, 0.02, 0.22)
+ORIENT_PREVIEW_REGION = (0.02, 0.22, 0.78, 0.98)
 ORIENT_PREVIEW_CROP_TOP = 0.07
 ORIENT_PREVIEW_BG = (0.05, 0.05, 0.08, 0.95)
 ORIENT_PREVIEW_MODEL = "../assets/space_cobot.glb"
@@ -126,6 +126,10 @@ ROLL_LEFT_BUTTON = KeyboardButton.ascii_key("l")
 ROLL_RIGHT_BUTTON = KeyboardButton.ascii_key("j")
 RESET_ORIENT_BUTTON = KeyboardButton.ascii_key("r")
 RESET_TO_ROBOT_ORIENT_BUTTON = KeyboardButton.backspace()
+ARROW_UP_BUTTON = KeyboardButton.up()
+ARROW_DOWN_BUTTON = KeyboardButton.down()
+ARROW_LEFT_BUTTON = KeyboardButton.left()
+ARROW_RIGHT_BUTTON = KeyboardButton.right()
 
 # Gamepad control tuning (daemon input)
 GAMEPAD_ENABLED = True
@@ -142,6 +146,7 @@ GAMEPAD_LOOK_SCALE = 1.0
 GAMEPAD_AXIS_LOCK_RATIO = 0.25
 GAMEPAD_INVERT_PITCH = False
 GAMEPAD_INVERT_ROLL = False
+GAMEPAD_DPAD_THRESHOLD = 0.5
 GAMEPAD_AUTOSCALE_MIN = 0.35
 GAMEPAD_AUTOSCALE_MAX_GAIN = 3.0
 GAMEPAD_AUTOSCALE_DECAY = 0.98
@@ -160,6 +165,8 @@ GAMEPAD_AXIS_RIGHT_X = ("right_x", "rx", "abs_rx")
 GAMEPAD_AXIS_RIGHT_Y = ("right_y", "ry", "abs_ry")
 GAMEPAD_AXIS_L2 = ("left_trigger", "lt", "abs_z", "abs_l2")
 GAMEPAD_AXIS_R2 = ("right_trigger", "rt", "abs_rz", "abs_r2")
+GAMEPAD_AXIS_DPAD_X = ("dpad_x", "abs_hat0x")
+GAMEPAD_AXIS_DPAD_Y = ("dpad_y", "abs_hat0y")
 
 # Optional index fallbacks when axis names are unavailable.
 # Set to integers (0-based) or None.
@@ -169,6 +176,8 @@ GAMEPAD_AXIS_INDEX_RIGHT_X = 2
 GAMEPAD_AXIS_INDEX_RIGHT_Y = 3
 GAMEPAD_AXIS_INDEX_L2 = 4
 GAMEPAD_AXIS_INDEX_R2 = 5
+GAMEPAD_AXIS_INDEX_DPAD_X = 6
+GAMEPAD_AXIS_INDEX_DPAD_Y = 7
 
 # Button names are resolved against daemon-published buttons.
 GAMEPAD_BUTTON_L1 = ("left_shoulder", "l1")
@@ -178,6 +187,8 @@ GAMEPAD_BUTTON_TRIANGLE = ("face_y", "north", "triangle")
 GAMEPAD_BUTTON_TOUCHPAD = ("touchpad",)
 GAMEPAD_BUTTON_ABORT = ("face_b", "east", "circle")
 GAMEPAD_BUTTON_INDEX_ABORT = 1
+GAMEPAD_BUTTON_L3 = ("left_stick", "l3", "thumb_l")
+GAMEPAD_BUTTON_R3 = ("right_stick", "r3", "thumb_r")
 
 # Optional index fallbacks when button names are unavailable.
 GAMEPAD_BUTTON_INDEX_L1 = 4
@@ -185,3 +196,5 @@ GAMEPAD_BUTTON_INDEX_R1 = 5
 GAMEPAD_BUTTON_INDEX_X = 0
 GAMEPAD_BUTTON_INDEX_TRIANGLE = 3
 GAMEPAD_BUTTON_INDEX_TOUCHPAD = 13
+GAMEPAD_BUTTON_INDEX_L3 = 10
+GAMEPAD_BUTTON_INDEX_R3 = 11

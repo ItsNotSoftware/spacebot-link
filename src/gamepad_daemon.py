@@ -49,6 +49,8 @@ BUTTONS = {
     "BTN_SELECT": "touchpad",
     "BTN_MODE": "touchpad",
     "BTN_TOUCHPAD": "touchpad",
+    "BTN_THUMBL": "left_stick",
+    "BTN_THUMBR": "right_stick",
 }
 
 AXIS_INDEX = {
@@ -70,6 +72,8 @@ BUTTON_INDEX = {
     "left_shoulder": 4,
     "right_shoulder": 5,
     "touchpad": 13,
+    "left_stick": 10,
+    "right_stick": 11,
 }
 
 AXIS_CENTER_UPDATE_BAND = 4

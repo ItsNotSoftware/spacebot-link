@@ -14,8 +14,12 @@ from config import (
     DOWN_BUTTON_ALT,
     FORWARD_BUTTON,
     GAMEPAD_AXIS_L2,
+    GAMEPAD_AXIS_DPAD_X,
+    GAMEPAD_AXIS_DPAD_Y,
     GAMEPAD_AXIS_LEFT_X,
     GAMEPAD_AXIS_LEFT_Y,
+    GAMEPAD_AXIS_INDEX_DPAD_X,
+    GAMEPAD_AXIS_INDEX_DPAD_Y,
     GAMEPAD_AXIS_INDEX_L2,
     GAMEPAD_AXIS_INDEX_LEFT_X,
     GAMEPAD_AXIS_INDEX_LEFT_Y,
@@ -29,12 +33,16 @@ from config import (
     GAMEPAD_BUTTON_L1,
     GAMEPAD_BUTTON_R1,
     GAMEPAD_BUTTON_ABORT,
+    GAMEPAD_BUTTON_L3,
+    GAMEPAD_BUTTON_R3,
     GAMEPAD_BUTTON_TOUCHPAD,
     GAMEPAD_BUTTON_TRIANGLE,
     GAMEPAD_BUTTON_X,
     GAMEPAD_BUTTON_INDEX_ABORT,
     GAMEPAD_BUTTON_INDEX_L1,
     GAMEPAD_BUTTON_INDEX_R1,
+    GAMEPAD_BUTTON_INDEX_L3,
+    GAMEPAD_BUTTON_INDEX_R3,
     GAMEPAD_BUTTON_INDEX_TOUCHPAD,
     GAMEPAD_BUTTON_INDEX_TRIANGLE,
     GAMEPAD_BUTTON_INDEX_X,
@@ -52,6 +60,7 @@ from config import (
     GAMEPAD_AUTOSCALE_DECAY,
     GAMEPAD_AUTOSCALE_MAX_GAIN,
     GAMEPAD_AUTOSCALE_MIN,
+    GAMEPAD_DPAD_THRESHOLD,
     GAMEPAD_REMOTE_AUTOSTART,
     GAMEPAD_REMOTE_ENABLED,
     GAMEPAD_REMOTE_ENDPOINT,
@@ -209,6 +218,7 @@ class InputController:
         self._move_robot = False
         self._nav_publish_before_robot_mode: Optional[bool] = None
         self._button_prev: dict[str, bool] = {}
+        self._dpad_prev: dict[str, float] = {"x": 0.0, "y": 0.0}
         self._gamepad_logged = False
         self._remote_sub: Optional[TeleopBusSub] = None
         self._remote_gamepad: Optional[_RemoteGamepad] = None
@@ -313,7 +323,7 @@ class InputController:
             UP_BUTTON,
             UP_BUTTON_ALT,
             DOWN_BUTTON,
-            DOWN_BUTTON_ALT,
+    DOWN_BUTTON_ALT,
             YAW_LEFT_BUTTON,
             YAW_RIGHT_BUTTON,
             PITCH_UP_BUTTON,
@@ -334,6 +344,13 @@ class InputController:
 
         def _mw_down(btn: Any) -> bool:
             return bool(mw) and mw.is_button_down(btn)
+
+        def _mw_pressed(btn: Any) -> bool:
+            pressed = bool(mw) and mw.is_button_down(btn)
+            key = f"key:{btn}"
+            prev = self._button_prev.get(key, False)
+            self._button_prev[key] = pressed
+            return pressed and not prev
 
         gp = self._get_gamepad()
 
@@ -396,10 +413,15 @@ class InputController:
             if _mw_down(RESET_ORIENT_BUTTON):
                 self.renderer.reset_avatar_to_camera_hpr()
             if gp is not None:
+                self._handle_dpad_rotation(gp)
                 if self._button_pressed(
                     gp, GAMEPAD_BUTTON_TRIANGLE, GAMEPAD_BUTTON_INDEX_TRIANGLE
                 ):
                     self.renderer.reset_avatar_to_camera_hpr()
+                if self._button_pressed(gp, GAMEPAD_BUTTON_L3, GAMEPAD_BUTTON_INDEX_L3):
+                    self.renderer.add_avatar_hpr(0.0, 0.0, -90.0)
+                if self._button_pressed(gp, GAMEPAD_BUTTON_R3, GAMEPAD_BUTTON_INDEX_R3):
+                    self.renderer.add_avatar_hpr(0.0, 0.0, 90.0)
                 if self._button_pressed(
                     gp, GAMEPAD_BUTTON_ABORT, GAMEPAD_BUTTON_INDEX_ABORT
                 ):
@@ -468,6 +490,10 @@ class InputController:
                     gp, GAMEPAD_BUTTON_TRIANGLE, GAMEPAD_BUTTON_INDEX_TRIANGLE
                 ):
                     self.renderer.reset_avatar_to_camera_hpr()
+                if self._button_pressed(gp, GAMEPAD_BUTTON_L3, GAMEPAD_BUTTON_INDEX_L3):
+                    self.renderer.add_avatar_hpr(0.0, 0.0, -90.0)
+                if self._button_pressed(gp, GAMEPAD_BUTTON_R3, GAMEPAD_BUTTON_INDEX_R3):
+                    self.renderer.add_avatar_hpr(0.0, 0.0, 90.0)
                 if self._button_pressed(
                     gp, GAMEPAD_BUTTON_ABORT, GAMEPAD_BUTTON_INDEX_ABORT
                 ):
@@ -612,6 +638,25 @@ class InputController:
             return
         print("[gamepad] button pressed")
 
+    def _handle_dpad_rotation(self, gp: _RemoteGamepad) -> None:
+        x = self._axis_value(gp, GAMEPAD_AXIS_DPAD_X, GAMEPAD_AXIS_INDEX_DPAD_X)
+        y = self._axis_value(gp, GAMEPAD_AXIS_DPAD_Y, GAMEPAD_AXIS_INDEX_DPAD_Y)
+        thr = float(GAMEPAD_DPAD_THRESHOLD)
+        prev_x = self._dpad_prev["x"]
+        prev_y = self._dpad_prev["y"]
+
+        if x <= -thr and prev_x > -thr:
+            self.renderer.add_avatar_hpr(90.0, 0.0, 0.0)
+        elif x >= thr and prev_x < thr:
+            self.renderer.add_avatar_hpr(-90.0, 0.0, 0.0)
+        if y <= -thr and prev_y > -thr:
+            self.renderer.add_avatar_hpr(0.0, 90.0, 0.0)
+        elif y >= thr and prev_y < thr:
+            self.renderer.add_avatar_hpr(0.0, -90.0, 0.0)
+
+        self._dpad_prev["x"] = x
+        self._dpad_prev["y"] = y
+
     def _is_gamepad_active(self) -> bool:
         gp = self._get_gamepad()
         if gp is None:
@@ -631,6 +676,10 @@ class InputController:
         if self._button_down(gp, GAMEPAD_BUTTON_L1, GAMEPAD_BUTTON_INDEX_L1):
             return True
         if self._button_down(gp, GAMEPAD_BUTTON_R1, GAMEPAD_BUTTON_INDEX_R1):
+            return True
+        if self._button_down(gp, GAMEPAD_BUTTON_L3, GAMEPAD_BUTTON_INDEX_L3):
+            return True
+        if self._button_down(gp, GAMEPAD_BUTTON_R3, GAMEPAD_BUTTON_INDEX_R3):
             return True
         if self._button_down(gp, GAMEPAD_BUTTON_ABORT, GAMEPAD_BUTTON_INDEX_ABORT):
             return True
