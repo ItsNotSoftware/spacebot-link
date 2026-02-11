@@ -387,7 +387,7 @@ class Renderer:
         rel = axes_inv * desired
         h, p, r = rel.getHpr()
         fixed = Quat()
-        fixed.setHpr((float(h), float(p), float(-r)))
+        fixed.setHpr((float(h), float(-p), float(-r)))
         self._orient_preview.setQuat(fixed)
 
     def _init_floor_indicator(self) -> None:
