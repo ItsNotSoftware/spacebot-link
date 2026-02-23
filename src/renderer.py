@@ -33,6 +33,7 @@ from config import (
     PATH_LINE_COLOR,
     PATH_LINE_STRIDE,
     PATH_LINE_THICKNESS,
+    PATH_MARKER_SPACING_M,
     PATH_MODE_DEFAULT,
     PATH_POSE_STRIDE,
     PATH_GHOST_SKIP_START,
@@ -106,6 +107,7 @@ class Renderer:
         )
         self.pose_stride: int = PATH_POSE_STRIDE
         self.line_stride: int = PATH_LINE_STRIDE
+        self.marker_spacing_m: float = max(0.05, float(PATH_MARKER_SPACING_M))
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
         self._path_goodness: Optional[float] = None
 
@@ -470,28 +472,55 @@ class Renderer:
         poses: List[PoseTuple],
         color: Optional[Tuple[float, float, float, float]] = None,
     ) -> None:
-        """Draw a line strip through all poses to preserve path continuity."""
+        """Draw a layered line strip to improve readability and depth cues."""
         if len(poses) < 2:
             return
-        segs = LineSegs("path_line")
-        segs.setThickness(PATH_LINE_THICKNESS)
-        segs.setColor(*(color or self._path_line_color()))
-        first = True
-        for pos, _ in poses:
-            x, y, z = pos
-            if first:
-                segs.moveTo(x, y, z)
-                first = False
-            else:
-                segs.drawTo(x, y, z)
-        node = segs.create()
-        if node is None:
-            return
-        np_line = self.base.render.attachNewNode(node)
-        np_line.setBin("fixed", 4)
-        np_line.setDepthWrite(False)
-        np_line.setDepthTest(False)
-        self._path_line = np_line
+        base_color = color or self._path_line_color()
+
+        def _make_line(
+            name: str,
+            thickness: float,
+            rgba: Tuple[float, float, float, float],
+            z_offset: float = 0.0,
+        ) -> Optional[NodePath]:
+            segs = LineSegs(name)
+            segs.setThickness(max(1.0, thickness))
+            segs.setColor(*rgba)
+            first = True
+            for pos, _ in poses:
+                x, y, z = pos
+                z = z + z_offset
+                if first:
+                    segs.moveTo(x, y, z)
+                    first = False
+                else:
+                    segs.drawTo(x, y, z)
+            node = segs.create()
+            if node is None:
+                return None
+            np_line = self.base.render.attachNewNode(node)
+            np_line.setDepthWrite(False)
+            np_line.setDepthTest(False)
+            return np_line
+
+        container = self.base.render.attachNewNode("path_line_layers")
+        r, g, b, a = base_color
+        outer = _make_line(
+            "path_line_outer",
+            PATH_LINE_THICKNESS + 2.5,
+            (0.0, 0.0, 0.0, min(0.55, a)),
+        )
+        inner = _make_line(
+            "path_line_inner",
+            PATH_LINE_THICKNESS,
+            (r, g, b, a),
+        )
+        for idx, child in enumerate((outer, inner)):
+            if child is None:
+                continue
+            child.reparentTo(container)
+            child.setBin("fixed", 4 + idx)
+        self._path_line = container
 
     def _path_line_color(self) -> Tuple[float, float, float, float]:
         """Return line color derived from path goodness, or the default if unavailable."""
@@ -525,6 +554,30 @@ class Renderer:
             self._path_goodness = max(0.0, min(1.0, float(goodness)))
         except Exception:
             self._path_goodness = None
+
+    def _marker_indices_by_distance(self, poses: List[PoseTuple]) -> List[int]:
+        """Select marker indices using arc-length spacing for stable visual density."""
+        if not poses:
+            return []
+        if len(poses) <= 2:
+            return list(range(len(poses)))
+        spacing = max(0.05, float(self.marker_spacing_m))
+        last_idx = len(poses) - 1
+        indices = [0]
+        next_target = spacing
+        dist_acc = 0.0
+        for idx in range(1, len(poses)):
+            (x1, y1, z1), _ = poses[idx - 1]
+            (x2, y2, z2), _ = poses[idx]
+            seg_len = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
+            dist_acc += seg_len
+            if dist_acc + 1e-6 >= next_target:
+                indices.append(idx)
+                while next_target <= dist_acc:
+                    next_target += spacing
+        if indices[-1] != last_idx:
+            indices.append(last_idx)
+        return indices
 
     def _make_plane_proto(self) -> Optional[NodePath]:
         """Build an outlined + translucent plane for pose visualization."""
@@ -895,7 +948,7 @@ class Renderer:
 
     def render_path_markers(self, poses: List[PoseTuple]) -> None:
         """Render path markers from a list of Panda3D (pos, hpr) tuples."""
-        if len(poses) < 3 and self.path_mode in (
+        if len(poses) < 2 and self.path_mode in (
             "poses",
             "poses_line",
             "animated",
@@ -924,11 +977,11 @@ class Renderer:
             proto_plane = self._plane_proto
             if proto_plane is None:
                 return
-            stride = max(1, int(self.pose_stride))
             last_idx = len(poses) - 1
             skip = max(0, int(PATH_GHOST_SKIP_START))
+            selected_idx = set(self._marker_indices_by_distance(poses))
             for idx, (pos, hpr) in enumerate(poses):
-                if idx not in (0, last_idx) and (idx + stride - 1) % stride != 0:
+                if idx not in selected_idx:
                     continue
                 if idx < skip and idx != last_idx:
                     continue
@@ -951,13 +1004,11 @@ class Renderer:
         if proto is None:
             return
 
-        stride = self.pose_stride if self.path_mode == "poses" else self.line_stride
-        stride = max(1, int(stride))
         last_idx = len(poses) - 1
         skip = max(0, int(PATH_GHOST_SKIP_START))
+        selected_idx = set(self._marker_indices_by_distance(poses))
         for idx, (pos, hpr) in enumerate(poses):
-            # Always render first and last pose, otherwise stride-filter.
-            if idx not in (0, last_idx) and (idx + stride - 1) % stride != 0:
+            if idx not in selected_idx:
                 continue
             if idx < skip and idx != last_idx:
                 continue
@@ -994,6 +1045,13 @@ class Renderer:
     def set_line_stride(self, stride: int) -> None:
         """Render pose+line ghosts at every Nth pose (stride)."""
         self.line_stride = max(1, int(stride))
+
+    def set_marker_spacing(self, spacing_m: float) -> None:
+        """Set distance-based spacing for path marker projections."""
+        try:
+            self.marker_spacing_m = max(0.05, float(spacing_m))
+        except Exception:
+            pass
 
     def set_anim_speed(self, speed: float) -> None:
         """Set animation speed for animated path mode."""

@@ -28,12 +28,15 @@ class UI:
         self._on_abort = on_abort
         self._status_provider = status_provider
         self._imgui_ready: bool = False
-        self._imgui_ini_path: Path = Path(__file__).resolve().parent.parent / "imgui.ini"
+        self._imgui_ini_path: Path = (
+            Path(__file__).resolve().parent.parent / "imgui.ini"
+        )
         self._show_nav: bool = True
         self._show_pathviz: bool = True
         self._show_poses: bool = True
         self._show_octomap: bool = True
         self._show_octomap_raw: bool = False
+        self._advanced_debug: bool = False
 
         self._init_imgui()
 
@@ -118,6 +121,52 @@ class UI:
                     return lowered == "true"
             return None
 
+        def _quality_badge(value):
+            try:
+                q = max(0.0, min(1.0, float(value)))
+            except Exception:
+                return None
+            if q >= 0.75:
+                label = "Good"
+            elif q >= 0.45:
+                label = "Caution"
+            else:
+                label = "Risky"
+            if q < 0.5:
+                t = q / 0.5
+                c0 = (0.95, 0.22, 0.20, 1.0)
+                c1 = (1.00, 0.78, 0.10, 1.0)
+            else:
+                t = (q - 0.5) / 0.5
+                c0 = (1.00, 0.78, 0.10, 1.0)
+                c1 = (0.22, 0.92, 0.38, 1.0)
+            color = tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))
+            return q, label, color
+
+        def _draw_quality_bar(
+            q: float, color: tuple[float, float, float, float], width: float = 0.0
+        ) -> None:
+            """Draw a compact horizontal bar showing path goodness."""
+            draw = imgui.get_window_draw_list()
+            if draw is None:
+                return
+            pos = imgui.get_cursor_screen_pos()
+            avail_w = imgui.get_content_region_avail().x
+            bar_w = max(120.0, width if width > 0.0 else avail_w)
+            bar_h = 12.0
+            x0, y0 = pos.x, pos.y
+            x1, y1 = x0 + bar_w, y0 + bar_h
+            rounding = 6.0
+            bg_col = imgui.get_color_u32((0.16, 0.17, 0.20, 1.0))
+            fill_col = imgui.get_color_u32(color)
+            border_col = imgui.get_color_u32((0.55, 0.58, 0.65, 0.55))
+            fill_x = x0 + max(0.0, min(1.0, q)) * bar_w
+            draw.add_rect_filled((x0, y0), (x1, y1), bg_col, rounding)
+            if fill_x > x0 + 1.0:
+                draw.add_rect_filled((x0, y0), (fill_x, y1), fill_col, rounding)
+            draw.add_rect((x0, y0), (x1, y1), border_col, rounding)
+            imgui.dummy((bar_w, bar_h))
+
         fps_text = status.get("fps", 0.0)
         imgui.text(f"FPS: {fps_text:.1f}")
 
@@ -128,24 +177,14 @@ class UI:
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
         path_goodness = status.get("path_goodness")
-        if path_goodness is not None:
+        quality_badge = _quality_badge(path_goodness)
+        if quality_badge is not None:
             try:
-                q = max(0.0, min(1.0, float(path_goodness)))
-                if q < 0.5:
-                    t = q / 0.5
-                    c0 = (0.95, 0.22, 0.20, 1.0)
-                    c1 = (1.00, 0.78, 0.10, 1.0)
-                else:
-                    t = (q - 0.5) / 0.5
-                    c0 = (1.00, 0.78, 0.10, 1.0)
-                    c1 = (0.22, 0.92, 0.38, 1.0)
-                quality_color = tuple(
-                    c0[i] + (c1[i] - c0[i]) * t for i in range(4)
-                )
+                q, quality_label, quality_color = quality_badge
                 imgui.same_line()
                 imgui.text_disabled("|")
                 imgui.same_line()
-                imgui.text_colored(quality_color, f"Path goodness: {q:.2f}")
+                imgui.text_colored(quality_color, f"Path: {quality_label} ({q:.2f})")
             except Exception:
                 pass
         occluded_bool = _parse_bool_flag(status.get("octomap_occluded"))
@@ -153,11 +192,7 @@ class UI:
             imgui.same_line()
             imgui.text_disabled("|")
             imgui.same_line()
-            occ_color = (
-                (1.0, 0.6, 0.2, 1.0)
-                if occluded_bool
-                else (0.7, 1.0, 0.7, 1.0)
-            )
+            occ_color = (1.0, 0.6, 0.2, 1.0) if occluded_bool else (0.7, 1.0, 0.7, 1.0)
             imgui.text_colored(
                 occ_color, f"Occluded: {'yes' if occluded_bool else 'no'}"
             )
@@ -167,9 +202,7 @@ class UI:
             imgui.text_disabled("|")
             imgui.same_line()
             inside_color = (
-                (1.0, 0.35, 0.35, 1.0)
-                if in_obstacle_bool
-                else (0.7, 1.0, 0.7, 1.0)
+                (1.0, 0.35, 0.35, 1.0) if in_obstacle_bool else (0.7, 1.0, 0.7, 1.0)
             )
             imgui.text_colored(
                 inside_color,
@@ -187,6 +220,8 @@ class UI:
         changed_floor, floor_on = imgui.checkbox(
             "Floor projection", bool(status.get("floor_projection_enabled", True))
         )
+        imgui.same_line()
+        _, self._advanced_debug = imgui.checkbox("Advanced debug", self._advanced_debug)
         if changed_nav:
             status.get("set_nav_enabled", lambda _v: None)(publish_nav)
         if changed_move:
@@ -206,6 +241,8 @@ class UI:
         _, self._show_poses = imgui.checkbox("Poses", self._show_poses)
         imgui.same_line()
         _, self._show_octomap = imgui.checkbox("OctoMap", self._show_octomap)
+        if not self._advanced_debug:
+            self._show_octomap = False
         imgui.spacing()
         imgui.columns(2, "debug_columns", False)
         if self._show_nav:
@@ -236,7 +273,11 @@ class UI:
             q = status.get("path_goodness")
             if q is not None:
                 try:
-                    imgui.text(f"  path_goodness (MC): {float(q):.3f}")
+                    qf = float(q)
+                    label = (
+                        "Good" if qf >= 0.75 else ("Caution" if qf >= 0.45 else "Risky")
+                    )
+                    imgui.text(f"  path_goodness (MC): {qf:.3f} [{label}]")
                 except Exception:
                     imgui.text(f"  path_goodness (MC): {q}")
             imgui.end_child()
@@ -256,27 +297,17 @@ class UI:
                 status.get("set_path_mode", lambda _m: None)(modes[new_idx])
 
             selected_mode = modes[new_idx]
-            if selected_mode == "poses":
-                pose_stride = int(status.get("pose_stride", 4))
-                imgui.text("Ghost stride (every Nth pose)")
+            if selected_mode in ("poses", "poses_line", "planes"):
+                marker_spacing = float(status.get("marker_spacing_m", 0.40))
+                imgui.text("Projection spacing (m)")
                 imgui.set_next_item_width(140)
-                changed, pose_stride = imgui.input_int("##pose_stride", pose_stride)
+                changed, marker_spacing = imgui.input_float(
+                    "##marker_spacing_m", marker_spacing, step=0.05
+                )
                 if changed:
-                    status.get("set_pose_stride", lambda _v: None)(max(1, pose_stride))
-            elif selected_mode == "poses_line":
-                line_stride = int(status.get("line_stride", 8))
-                imgui.text("Ghost stride (every Nth pose)")
-                imgui.set_next_item_width(140)
-                changed, line_stride = imgui.input_int("##line_stride", line_stride)
-                if changed:
-                    status.get("set_line_stride", lambda _v: None)(max(1, line_stride))
-            elif selected_mode == "planes":
-                plane_stride = int(status.get("pose_stride", 4))
-                imgui.text("Plane stride (every Nth pose)")
-                imgui.set_next_item_width(140)
-                changed, plane_stride = imgui.input_int("##plane_stride", plane_stride)
-                if changed:
-                    status.get("set_pose_stride", lambda _v: None)(max(1, plane_stride))
+                    status.get("set_marker_spacing", lambda _v: None)(
+                        max(0.05, marker_spacing)
+                    )
             else:
                 anim_speed = float(status.get("anim_speed", 1.0))
                 imgui.text("Anim speed (m/s)")
@@ -347,9 +378,7 @@ class UI:
                 imgui.text("avatar_occluded=unknown")
             else:
                 occ_color = (
-                    (1.0, 0.6, 0.2, 1.0)
-                    if occluded_display
-                    else (0.7, 1.0, 0.7, 1.0)
+                    (1.0, 0.6, 0.2, 1.0) if occluded_display else (0.7, 1.0, 0.7, 1.0)
                 )
                 imgui.text_colored(
                     occ_color,
@@ -393,7 +422,7 @@ class UI:
             imgui.columns(1)
 
             octomap_json = status.get("octomap_json")
-            if octomap_json:
+            if octomap_json and self._advanced_debug:
                 imgui.spacing()
                 _, self._show_octomap_raw = imgui.checkbox(
                     "Show raw JSON", self._show_octomap_raw
@@ -411,7 +440,7 @@ class UI:
 
         # Top-right control window
         ctrl_w = 420.0
-        ctrl_h = 250.0
+        ctrl_h = 270.0
         ctrl_x = max(pad, scr_w - ctrl_w - pad)
         ctrl_y = pad
         imgui.set_next_window_pos((ctrl_x, ctrl_y), imgui.Cond_.always)
@@ -442,7 +471,13 @@ class UI:
 
         is_follow = status.get("mode") == "Follow Mode"
 
-        def _mode_colors(active: bool) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float], tuple[float, float, float, float]]:
+        def _mode_colors(
+            active: bool,
+        ) -> tuple[
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+            tuple[float, float, float, float],
+        ]:
             """Return base/hover/active colors based on mode state."""
             if active:
                 return (
@@ -465,8 +500,11 @@ class UI:
         if _button("Goal", (half, btn_h), g_base, g_hover, g_active):
             status.get("activate_goal", lambda: None)()
 
-        imgui.spacing()
-        imgui.text_colored((0.82, 0.90, 1.00, 1.0), f"Active Mode: {status.get('mode')}")
+        quality_badge = _quality_badge(status.get("path_goodness"))
+        if quality_badge is not None:
+            q, quality_label, quality_color = quality_badge
+            imgui.text_colored(quality_color, f"Path {quality_label} ({q:.2f})")
+            _draw_quality_bar(q, quality_color, width=avail)
         imgui.separator()
 
         btn_w = avail
