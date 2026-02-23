@@ -122,9 +122,16 @@ class SpacebotLinkApp(ShowBase):
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
         self._last_path_quality: Optional[Dict[str, Any]] = None
         self._last_exec_summary_by_topic: Dict[str, Dict[str, Any]] = {}
+        self._csv_header_printed: bool = False
+        self._run_seq: int = 0
+        self._pending_run_id: Optional[int] = None
+        self._pending_run_started_at: Optional[float] = None
+        self._pending_run_quality: Optional[Dict[str, Any]] = None
+        self._csv_summary_topic_locked: Optional[str] = None
         self._octomap_proc: Optional[subprocess.Popen] = None
         self._octomap_socket: Optional[zmq.Socket] = None
         self._gamepad_proc: Optional[subprocess.Popen] = None
+        self._cleaned_up: bool = False
         self._octomap_context = zmq.Context.instance()
         self._last_octomap: Optional[Dict[str, Any]] = None
         self._last_octomap_raw: Optional[str] = None
@@ -471,35 +478,63 @@ class SpacebotLinkApp(ShowBase):
             poses = self._prepend_robot_pose_if_needed(poses)
             self.renderer.render_path_markers(poses)
             self._last_path_poses = poses
+            # Start a new run only if no run is already active.
+            # Mid-trajectory path updates should not create extra CSV rows.
+            if self._pending_run_id is None:
+                self._run_seq += 1
+                self._pending_run_id = self._run_seq
+                self._pending_run_started_at = None
+                self._pending_run_quality = None
         return Task.cont
 
     def _maybe_log_path_quality_csv(self) -> None:
-        """Print CSV line when execution summary arrives, using cached quality."""
+        """Print one final CSV line per path run based on final execution summary."""
         if not PATH_QUALITY_CSV_ENABLED:
             return
 
         payload = self.bus_sensors.get(TOPIC_PATH_QUALITY)
         if isinstance(payload, dict) and payload != self._last_path_quality:
             self._last_path_quality = payload
+            if self._pending_run_id is not None:
+                self._pending_run_quality = payload
 
+        if self._pending_run_id is None:
+            return
+
+        summary_to_log: Optional[Dict[str, Any]] = None
         for topic in (
             TOPIC_PATH_EXEC_SUMMARY_VEL,
             TOPIC_PATH_EXEC_SUMMARY_FORCE,
         ):
+            if (
+                self._csv_summary_topic_locked is not None
+                and topic != self._csv_summary_topic_locked
+            ):
+                continue
             summary = self.bus_sensors.get(topic)
             if not isinstance(summary, dict):
                 continue
             if self._last_exec_summary_by_topic.get(topic) == summary:
                 continue
             self._last_exec_summary_by_topic[topic] = summary
-            if not self._last_path_quality:
-                continue
-            header, line = self._format_path_quality_csv(
-                self._last_path_quality, summary
-            )
+            if self._csv_summary_topic_locked is None:
+                self._csv_summary_topic_locked = topic
+            summary_to_log = summary
+            break
+
+        quality = self._pending_run_quality or self._last_path_quality
+
+        if summary_to_log is not None and quality:
+            header, line = self._format_path_quality_csv(quality, summary_to_log)
             if line:
-                print(header)
+                if not self._csv_header_printed:
+                    print(header)
+                    self._csv_header_printed = True
                 print(line)
+            self._pending_run_id = None
+            self._pending_run_started_at = None
+            self._pending_run_quality = None
+            return
 
     @staticmethod
     def _format_path_quality_csv(
@@ -515,28 +550,51 @@ class SpacebotLinkApp(ShowBase):
         narrow = _float(quality.get("narrow_score"))
         turn = _float(quality.get("turn_score"))
         efficiency = _float(quality.get("efficiency_score"))
-        planned = _float(summary.get("planned_length"))
+        min_clearance = _float(quality.get("min_clearance_m"))
+        narrow_fraction = _float(quality.get("narrow_fraction"))
+        max_turn_rad = _float(quality.get("max_turn_rad"))
+        path_length = _float(quality.get("path_length_m", summary.get("planned_length")))
+        straight_dist = _float(quality.get("straight_dist_m"))
+        detour_ratio = _float(quality.get("detour_ratio"))
+        if detour_ratio <= 0.0:
+            detour_ratio = path_length / straight_dist if straight_dist > 1e-6 else 1.0
+
+        planned = path_length
         executed = _float(summary.get("executed_length"))
         rms = _float(summary.get("rms_tracking_error"))
 
-        def _int(value: Any) -> int:
-            try:
-                return int(float(value))
-            except (TypeError, ValueError):
-                return 0
-
-        nrc = _int(summary.get("nrc", quality.get("nrc", 0)))
+        nrc = 0
         mev = _float(summary.get("mev", quality.get("mev", 0.0)))
 
         width = 12
-        labels = ("CLR", "NAR", "TRN", "EFF", "PLN", "EXE", "RMS", "NRC", "MEV")
+        labels = (
+            "CLR",
+            "NAR",
+            "TRN",
+            "EFF",
+            "MCLR",
+            "NFR",
+            "MTR",
+            "PLN",
+            "STD",
+            "DTR",
+            "EXE",
+            "RMS",
+            "NRC",
+            "MEV",
+        )
         header = "".join(f"{label:>{width}}" for label in labels)
         values = (
             f"{clearance:>{width}.5f}",
             f"{narrow:>{width}.5f}",
             f"{turn:>{width}.5f}",
             f"{efficiency:>{width}.5f}",
+            f"{min_clearance:>{width}.5f}",
+            f"{narrow_fraction:>{width}.5f}",
+            f"{max_turn_rad:>{width}.5f}",
             f"{planned:>{width}.5f}",
+            f"{straight_dist:>{width}.5f}",
+            f"{detour_ratio:>{width}.5f}",
             f"{executed:>{width}.5f}",
             f"{rms:>{width}.5f}",
             f"{nrc:>{width}d}",
@@ -794,6 +852,26 @@ class SpacebotLinkApp(ShowBase):
 
     # ---- cleanup ----
     def _cleanup(self) -> None:
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+
+        def _stop_process(proc: Optional[subprocess.Popen], name: str) -> None:
+            if proc is None or proc.poll() is not None:
+                return
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                print(f"[{name}] terminate timed out, killing process")
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
         self.ui.save_imgui_settings()
         try:
             self.bus_sensors.close()
@@ -814,12 +892,14 @@ class SpacebotLinkApp(ShowBase):
             pass
         try:
             if self._octomap_proc is not None:
-                self._octomap_proc.terminate()
+                _stop_process(self._octomap_proc, "octomap")
+                self._octomap_proc = None
         except Exception:
             pass
         try:
             if self._gamepad_proc is not None:
-                self._gamepad_proc.terminate()
+                _stop_process(self._gamepad_proc, "gamepad")
+                self._gamepad_proc = None
         except Exception:
             pass
         self.renderer.clear_path_markers()
@@ -827,7 +907,16 @@ class SpacebotLinkApp(ShowBase):
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     app = SpacebotLinkApp()
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        print("[main] KeyboardInterrupt received, shutting down")
+    finally:
+        app._cleanup()
+        try:
+            app.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
