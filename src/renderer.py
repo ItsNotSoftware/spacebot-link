@@ -31,6 +31,7 @@ from config import (
     PATH_ANIM_LINE_ENABLED,
     PATH_ANIM_SPEED,
     PATH_LINE_COLOR,
+    PATH_LINE_SAMPLE_SPACING_M,
     PATH_LINE_STRIDE,
     PATH_LINE_THICKNESS,
     PATH_MARKER_SPACING_M,
@@ -108,8 +109,10 @@ class Renderer:
         self.pose_stride: int = PATH_POSE_STRIDE
         self.line_stride: int = PATH_LINE_STRIDE
         self.marker_spacing_m: float = max(0.05, float(PATH_MARKER_SPACING_M))
+        self.line_sample_spacing_m: float = max(0.05, float(PATH_LINE_SAMPLE_SPACING_M))
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
         self._path_goodness: Optional[float] = None
+        self._path_local_risks: Optional[List[float]] = None
 
         self._init_lights()
         self._make_bg_card(initial_aspect=9 / 16)
@@ -473,28 +476,24 @@ class Renderer:
         color: Optional[Tuple[float, float, float, float]] = None,
     ) -> None:
         """Draw a layered line strip to improve readability and depth cues."""
-        if len(poses) < 2:
+        line_poses = self._line_poses_by_distance(poses)
+        if len(line_poses) < 2:
             return
         base_color = color or self._path_line_color()
+        seg_count = max(0, len(line_poses) - 1)
+        segment_risks = self._segment_risks_for_poses(line_poses)
+        if len(segment_risks) < seg_count:
+            segment_risks.extend([0.0] * (seg_count - len(segment_risks)))
 
-        def _make_line(
-            name: str,
-            thickness: float,
-            rgba: Tuple[float, float, float, float],
-            z_offset: float = 0.0,
-        ) -> Optional[NodePath]:
+        def _make_layer(name: str, thickness: float, color_fn) -> Optional[NodePath]:
             segs = LineSegs(name)
             segs.setThickness(max(1.0, thickness))
-            segs.setColor(*rgba)
-            first = True
-            for pos, _ in poses:
-                x, y, z = pos
-                z = z + z_offset
-                if first:
-                    segs.moveTo(x, y, z)
-                    first = False
-                else:
-                    segs.drawTo(x, y, z)
+            for idx in range(seg_count):
+                (x1, y1, z1), _ = line_poses[idx]
+                (x2, y2, z2), _ = line_poses[idx + 1]
+                segs.setColor(*color_fn(idx, seg_count))
+                segs.moveTo(x1, y1, z1)
+                segs.drawTo(x2, y2, z2)
             node = segs.create()
             if node is None:
                 return None
@@ -503,18 +502,42 @@ class Renderer:
             np_line.setDepthTest(False)
             return np_line
 
+        def _risk_to_color(risk: float) -> Tuple[float, float, float, float]:
+            risk = max(0.0, min(1.0, float(risk)))
+            red = (0.95, 0.22, 0.20, 1.0)
+            yellow = (1.00, 0.78, 0.10, 1.0)
+            green = (0.22, 0.92, 0.38, 1.0)
+            # low risk -> green, high risk -> red
+            if risk < 0.5:
+                t = risk / 0.5
+                c0, c1 = green, yellow
+            else:
+                t = (risk - 0.5) / 0.5
+                c0, c1 = yellow, red
+            return tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))  # type: ignore[return-value]
+
         container = self.base.render.attachNewNode("path_line_layers")
         r, g, b, a = base_color
-        outer = _make_line(
+        outer = _make_layer(
             "path_line_outer",
             PATH_LINE_THICKNESS + 2.5,
-            (0.0, 0.0, 0.0, min(0.55, a)),
+            lambda _idx, _n: (0.0, 0.0, 0.0, min(0.55, a)),
         )
-        inner = _make_line(
-            "path_line_inner",
-            PATH_LINE_THICKNESS,
-            (r, g, b, a),
-        )
+        if any(v > 1e-6 for v in segment_risks):
+            def _inner_color(idx: int, nseg: int) -> Tuple[float, float, float, float]:
+                progress = (idx + 0.5) / max(1, nseg)
+                rr, gg, bb, _ = _risk_to_color(segment_risks[idx])
+                # Add subtle progression-based fade to improve depth/readability.
+                alpha = max(0.35, a * (0.70 + 0.30 * (1.0 - 0.35 * progress)))
+                brighten = 1.0 - 0.12 * progress
+                return (rr * brighten, gg * brighten, bb * brighten, alpha)
+        else:
+            def _inner_color(idx: int, nseg: int) -> Tuple[float, float, float, float]:
+                progress = (idx + 0.5) / max(1, nseg)
+                alpha = max(0.35, a * (0.70 + 0.30 * (1.0 - 0.35 * progress)))
+                brighten = 1.0 - 0.12 * progress
+                return (r * brighten, g * brighten, b * brighten, alpha)
+        inner = _make_layer("path_line_inner", PATH_LINE_THICKNESS, _inner_color)
         for idx, child in enumerate((outer, inner)):
             if child is None:
                 continue
@@ -555,29 +578,114 @@ class Renderer:
         except Exception:
             self._path_goodness = None
 
-    def _marker_indices_by_distance(self, poses: List[PoseTuple]) -> List[int]:
-        """Select marker indices using arc-length spacing for stable visual density."""
-        if not poses:
-            return []
+    def set_path_local_risks(self, local_risks: Optional[List[Any]]) -> None:
+        """Store MC local risk samples (0..1) used for heatmapped path line rendering."""
+        if not isinstance(local_risks, list):
+            self._path_local_risks = None
+            return
+        cleaned: List[float] = []
+        for v in local_risks:
+            try:
+                cleaned.append(max(0.0, min(1.0, float(v))))
+            except Exception:
+                continue
+        self._path_local_risks = cleaned or None
+
+    def _line_poses_by_distance(self, poses: List[PoseTuple]) -> List[PoseTuple]:
+        """Decimate line rendering by distance to reduce draw cost while preserving shape."""
         if len(poses) <= 2:
-            return list(range(len(poses)))
-        spacing = max(0.05, float(self.marker_spacing_m))
-        last_idx = len(poses) - 1
-        indices = [0]
-        next_target = spacing
+            return list(poses)
+        spacing = max(0.05, float(self.line_sample_spacing_m))
+        out: List[PoseTuple] = [poses[0]]
         dist_acc = 0.0
+        next_target = spacing
         for idx in range(1, len(poses)):
             (x1, y1, z1), _ = poses[idx - 1]
             (x2, y2, z2), _ = poses[idx]
             seg_len = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
             dist_acc += seg_len
             if dist_acc + 1e-6 >= next_target:
-                indices.append(idx)
+                out.append(poses[idx])
                 while next_target <= dist_acc:
                     next_target += spacing
-        if indices[-1] != last_idx:
-            indices.append(last_idx)
-        return indices
+        if out[-1] != poses[-1]:
+            out.append(poses[-1])
+        return out
+
+    def _segment_risks_for_poses(self, poses: List[PoseTuple]) -> List[float]:
+        """Map local risk samples to rendered path segments."""
+        if len(poses) < 2:
+            return []
+        risks = self._path_local_risks
+        seg_count = len(poses) - 1
+        if not risks:
+            return [0.0] * seg_count
+        if len(risks) == 1:
+            return [risks[0]] * seg_count
+        mapped: List[float] = []
+        last = len(risks) - 1
+        for idx in range(seg_count):
+            t = (idx + 0.5) / max(1, seg_count)
+            src_f = t * last
+            i0 = int(src_f)
+            i1 = min(last, i0 + 1)
+            frac = src_f - i0
+            val = risks[i0] + (risks[i1] - risks[i0]) * frac
+            mapped.append(max(0.0, min(1.0, val)))
+        return mapped
+
+    def _resample_poses_by_distance(self, poses: List[PoseTuple]) -> List[PoseTuple]:
+        """Resample path poses at fixed arc-length spacing for consistent preview density."""
+        if len(poses) <= 2:
+            return list(poses)
+        spacing = max(0.05, float(self.marker_spacing_m))
+
+        cumulative = [0.0]
+        total = 0.0
+        for i in range(1, len(poses)):
+            (x1, y1, z1), _ = poses[i - 1]
+            (x2, y2, z2), _ = poses[i]
+            d = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
+            total += d
+            cumulative.append(total)
+
+        if total <= 1e-6:
+            return [poses[0], poses[-1]] if poses[0] != poses[-1] else [poses[0]]
+
+        targets: List[float] = [0.0]
+        t = spacing
+        while t < total - 1e-6:
+            targets.append(t)
+            t += spacing
+        if targets[-1] != total:
+            targets.append(total)
+
+        out: List[PoseTuple] = []
+        seg_idx = 0
+        for target in targets:
+            while seg_idx + 1 < len(cumulative) and cumulative[seg_idx + 1] < target:
+                seg_idx += 1
+            if seg_idx + 1 >= len(poses):
+                out.append(poses[-1])
+                continue
+            s0 = cumulative[seg_idx]
+            s1 = cumulative[seg_idx + 1]
+            span = max(1e-6, s1 - s0)
+            u = max(0.0, min(1.0, (target - s0) / span))
+            (x1, y1, z1), (h1, p1, r1) = poses[seg_idx]
+            (x2, y2, z2), (h2, p2, r2) = poses[seg_idx + 1]
+            pos = (
+                x1 + (x2 - x1) * u,
+                y1 + (y2 - y1) * u,
+                z1 + (z2 - z1) * u,
+            )
+            hpr = (
+                h1 + (h2 - h1) * u,
+                p1 + (p2 - p1) * u,
+                r1 + (r2 - r1) * u,
+            )
+            out.append((pos, hpr))
+        return out
 
     def _make_plane_proto(self) -> Optional[NodePath]:
         """Build an outlined + translucent plane for pose visualization."""
@@ -933,18 +1041,23 @@ class Renderer:
         """Remove path visuals; optionally keep running animation."""
         if not keep_animation:
             self._stop_path_animation()
-        if self._path_line is not None:
-            try:
-                self._path_line.removeNode()
-            except Exception:
-                pass
-            self._path_line = None
+        self._clear_path_line()
         for np_ in self._path_markers:
             try:
                 np_.removeNode()
             except Exception:
                 pass
         self._path_markers.clear()
+
+    def _clear_path_line(self) -> None:
+        """Remove only the line overlay, preserving ghost/plane markers."""
+        if self._path_line is None:
+            return
+        try:
+            self._path_line.removeNode()
+        except Exception:
+            pass
+        self._path_line = None
 
     def render_path_markers(self, poses: List[PoseTuple]) -> None:
         """Render path markers from a list of Panda3D (pos, hpr) tuples."""
@@ -977,12 +1090,10 @@ class Renderer:
             proto_plane = self._plane_proto
             if proto_plane is None:
                 return
-            last_idx = len(poses) - 1
+            marker_poses = self._resample_poses_by_distance(poses)
+            last_idx = len(marker_poses) - 1
             skip = max(0, int(PATH_GHOST_SKIP_START))
-            selected_idx = set(self._marker_indices_by_distance(poses))
-            for idx, (pos, hpr) in enumerate(poses):
-                if idx not in selected_idx:
-                    continue
+            for idx, (pos, hpr) in enumerate(marker_poses):
                 if idx < skip and idx != last_idx:
                     continue
                 plane = proto_plane.copyTo(self.base.render)
@@ -1004,12 +1115,10 @@ class Renderer:
         if proto is None:
             return
 
-        last_idx = len(poses) - 1
+        marker_poses = self._resample_poses_by_distance(poses)
+        last_idx = len(marker_poses) - 1
         skip = max(0, int(PATH_GHOST_SKIP_START))
-        selected_idx = set(self._marker_indices_by_distance(poses))
-        for idx, (pos, hpr) in enumerate(poses):
-            if idx not in selected_idx:
-                continue
+        for idx, (pos, hpr) in enumerate(marker_poses):
             if idx < skip and idx != last_idx:
                 continue
             ghost = proto.copyTo(self.base.render)
@@ -1030,6 +1139,18 @@ class Renderer:
     def clear_path_markers(self) -> None:
         """Legacy entrypoint to clear all path visuals."""
         self._clear_path_vis()
+
+    def refresh_path_line(self, poses: List[PoseTuple]) -> None:
+        """Rebuild only the path line for quality/style updates, preserving markers."""
+        if self.path_mode == "animated":
+            if not self.anim_line_enabled:
+                self._clear_path_line()
+                return
+        elif self.path_mode != "poses_line":
+            return
+        self._clear_path_line()
+        if len(poses) >= 2:
+            self._draw_path_line(poses)
 
     # ---- path viz configuration ----
     def set_path_mode(self, mode: str) -> None:

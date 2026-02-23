@@ -10,6 +10,18 @@ from imgui_bundle import imgui
 from panda3d.core import PerspectiveLens
 from direct.showbase.ShowBase import ShowBase
 
+from config import (
+    PATH_QUALITY_LABEL_CRITICAL,
+    PATH_QUALITY_LABEL_EXCELLENT,
+    PATH_QUALITY_LABEL_GOOD,
+    PATH_QUALITY_LABEL_RISKY,
+    PATH_QUALITY_THRESH_EXCELLENT,
+    PATH_QUALITY_THRESH_GOOD,
+    PATH_QUALITY_THRESH_RISKY,
+    UI_FONT_PATH,
+    UI_FONT_SIZE_PX,
+)
+
 
 class UI:
     """Lightweight UI state + ImGui overlay."""
@@ -78,6 +90,20 @@ class UI:
             p3dimgui.init()
             if self._imgui_ini_path.exists():
                 imgui.load_ini_settings_from_disk(str(self._imgui_ini_path))
+            io = imgui.get_io()
+            # Load a configurable TTF font (bold by default) when available.
+            try:
+                font_path = Path(str(UI_FONT_PATH)).expanduser()
+                if font_path.is_file():
+                    font = io.fonts.add_font_from_file_ttf(
+                        str(font_path), float(UI_FONT_SIZE_PX)
+                    )
+                    if font is not None:
+                        io.font_default = font
+                else:
+                    print(f"[imgui] UI font not found, using default: {font_path}")
+            except Exception as exc:
+                print(f"[imgui] Failed to load UI font, using default: {exc}")
             style = imgui.get_style()
             style.font_size_base = 23.0
             style.font_scale_main = 1.3
@@ -126,12 +152,23 @@ class UI:
                 q = max(0.0, min(1.0, float(value)))
             except Exception:
                 return None
-            if q >= 0.75:
-                label = "Good"
-            elif q >= 0.45:
-                label = "Caution"
+            excellent_thr = float(PATH_QUALITY_THRESH_EXCELLENT)
+            good_thr = float(PATH_QUALITY_THRESH_GOOD)
+            risky_thr = float(PATH_QUALITY_THRESH_RISKY)
+            thresholds = sorted([risky_thr, good_thr, excellent_thr])
+            risky_thr, good_thr, excellent_thr = (
+                thresholds[0],
+                thresholds[1],
+                thresholds[2],
+            )
+            if q >= excellent_thr:
+                label = PATH_QUALITY_LABEL_EXCELLENT
+            elif q >= good_thr:
+                label = PATH_QUALITY_LABEL_GOOD
+            elif q >= risky_thr:
+                label = PATH_QUALITY_LABEL_RISKY
             else:
-                label = "Risky"
+                label = PATH_QUALITY_LABEL_CRITICAL
             if q < 0.5:
                 t = q / 0.5
                 c0 = (0.95, 0.22, 0.20, 1.0)
@@ -274,9 +311,8 @@ class UI:
             if q is not None:
                 try:
                     qf = float(q)
-                    label = (
-                        "Good" if qf >= 0.75 else ("Caution" if qf >= 0.45 else "Risky")
-                    )
+                    badge = _quality_badge(qf)
+                    label = badge[1] if badge is not None else "?"
                     imgui.text(f"  path_goodness (MC): {qf:.3f} [{label}]")
                 except Exception:
                     imgui.text(f"  path_goodness (MC): {q}")
@@ -439,20 +475,38 @@ class UI:
         imgui.end()
 
         # Top-right control window
-        ctrl_w = 420.0
-        ctrl_h = 270.0
+        ctrl_w = 590.0
+        ctrl_h = 360.0
         ctrl_x = max(pad, scr_w - ctrl_w - pad)
         ctrl_y = pad
         imgui.set_next_window_pos((ctrl_x, ctrl_y), imgui.Cond_.always)
         imgui.set_next_window_size((ctrl_w, ctrl_h), imgui.Cond_.once)
         imgui.begin(
-            "Controls",
+            "Dashboard",
             flags=imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_resize,
         )
+        imgui.push_style_var(imgui.StyleVar_.item_spacing, (18.0, 14.0))
+        imgui.push_style_var(imgui.StyleVar_.frame_padding, (18.0, 16.0))
 
         avail = imgui.get_content_region_avail().x
         half = (avail - imgui.get_style().item_spacing.x) * 0.5
-        btn_h = 56
+        btn_h = 84
+
+        def _text_bold(color, text: str) -> None:
+            """Draw text with a simple double-pass to mimic a bolder weight."""
+            pos = imgui.get_cursor_screen_pos()
+            draw = imgui.get_window_draw_list()
+            if draw is None:
+                imgui.text_colored(color, text)
+                return
+            shadow = (0.02, 0.02, 0.02, color[3] * 0.95)
+            shadow_u32 = imgui.get_color_u32(shadow)
+            color_u32 = imgui.get_color_u32(color)
+            # Multi-pass offsets create a thicker/faux-bold appearance.
+            for ox, oy in ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (2.0, 0.5)):
+                draw.add_text((pos.x + ox, pos.y + oy), shadow_u32, text)
+            draw.add_text((pos.x, pos.y), color_u32, text)
+            imgui.dummy(imgui.calc_text_size(text))
 
         def _button(
             label: str,
@@ -494,22 +548,22 @@ class UI:
         f_base, f_hover, f_active = _mode_colors(is_follow)
         g_base, g_hover, g_active = _mode_colors(not is_follow)
 
-        if _button("Follow", (half, btn_h), f_base, f_hover, f_active):
+        if _button("FOLLOW", (half, btn_h), f_base, f_hover, f_active):
             status.get("activate_follow", lambda: None)()
         imgui.same_line()
-        if _button("Goal", (half, btn_h), g_base, g_hover, g_active):
+        if _button("GOAL", (half, btn_h), g_base, g_hover, g_active):
             status.get("activate_goal", lambda: None)()
 
         quality_badge = _quality_badge(status.get("path_goodness"))
         if quality_badge is not None:
             q, quality_label, quality_color = quality_badge
-            imgui.text_colored(quality_color, f"Path {quality_label} ({q:.2f})")
+            _text_bold(quality_color, f"PATH {quality_label.upper()} ({q:.2f})")
             _draw_quality_bar(q, quality_color, width=avail)
         imgui.separator()
 
         btn_w = avail
         if _button(
-            "Abort",
+            "ABORT",
             (btn_w, btn_h),
             (0.70, 0.22, 0.22, 1.0),
             (0.78, 0.28, 0.28, 1.0),
@@ -517,6 +571,7 @@ class UI:
         ):
             self.trigger_abort()
 
+        imgui.pop_style_var(2)
         imgui.end()
 
     def save_imgui_settings(self) -> None:

@@ -6,6 +6,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from typing import Any, Dict, Optional, Sequence, List, Tuple
 
 from panda3d.core import loadPrcFileData, PythonTask
@@ -126,6 +127,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_octomap: Optional[Dict[str, Any]] = None
         self._last_octomap_raw: Optional[str] = None
         self._last_avatar_state: Optional[Tuple[Optional[bool], Optional[bool]]] = None
+        self._last_path_line_style_refresh_s: float = 0.0
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -173,8 +175,8 @@ class SpacebotLinkApp(ShowBase):
             self._last_path_quality = payload
             try:
                 self.renderer.set_path_goodness(self._extract_path_goodness(payload))
-                if self.ui.mode != "Follow Mode":
-                    self._rerender_path()
+                self.renderer.set_path_local_risks(payload.get("local_risks"))
+                self._refresh_path_line_style_if_needed()
             except Exception:
                 pass
         return Task.cont
@@ -716,6 +718,18 @@ class SpacebotLinkApp(ShowBase):
             self.renderer.render_path_markers(self.nav.state.follow_path_points)
         elif self._last_path_poses:
             self.renderer.render_path_markers(self._last_path_poses)
+
+    def _refresh_path_line_style_if_needed(self, min_interval_s: float = 0.15) -> None:
+        """Refresh only line style/heatmap for path-quality updates (throttled)."""
+        if self.ui.mode == "Follow Mode":
+            return
+        now_s = time.monotonic()
+        if (now_s - self._last_path_line_style_refresh_s) < max(0.0, min_interval_s):
+            return
+        if not self._last_path_poses:
+            return
+        self.renderer.refresh_path_line(self._last_path_poses)
+        self._last_path_line_style_refresh_s = now_s
 
     # ---- path viz setters ----
     def _set_path_mode(self, mode: str) -> None:
