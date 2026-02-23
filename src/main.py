@@ -574,15 +574,11 @@ class SpacebotLinkApp(ShowBase):
             "reset_orientation": self.renderer.reset_avatar_to_camera_hpr,
             "nudge_avatar_hpr": self.renderer.add_avatar_hpr,
             "path_mode": self.renderer.path_mode,
-            "pose_stride": self.renderer.pose_stride,
-            "line_stride": self.renderer.line_stride,
             "marker_spacing_m": self.renderer.marker_spacing_m,
             "anim_speed": self.renderer.anim_speed,
             "anim_instances": self.renderer.anim_instances,
             "anim_line_enabled": self.renderer.anim_line_enabled,
             "set_path_mode": self._set_path_mode,
-            "set_pose_stride": self._set_pose_stride,
-            "set_line_stride": self._set_line_stride,
             "set_marker_spacing": self._set_marker_spacing,
             "set_anim_speed": self._set_anim_speed,
             "set_anim_instances": self._set_anim_instances,
@@ -734,14 +730,6 @@ class SpacebotLinkApp(ShowBase):
     # ---- path viz setters ----
     def _set_path_mode(self, mode: str) -> None:
         self.renderer.set_path_mode(mode)
-        self._rerender_path()
-
-    def _set_pose_stride(self, stride: int) -> None:
-        self.renderer.set_pose_stride(stride)
-        self._rerender_path()
-
-    def _set_line_stride(self, stride: int) -> None:
-        self.renderer.set_line_stride(stride)
         self._rerender_path()
 
     def _set_marker_spacing(self, spacing_m: float) -> None:

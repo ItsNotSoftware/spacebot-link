@@ -55,8 +55,6 @@ AVATAR_HIDE_DISTANCE = 0.15
 
 # Path visualization defaults
 PATH_MODE_DEFAULT = "poses_line"  # poses | poses_line | animated | planes
-PATH_POSE_STRIDE = 4
-PATH_LINE_STRIDE = 8
 PATH_MARKER_SPACING_M = 0.50
 PATH_LINE_SAMPLE_SPACING_M = 0.15
 PATH_ANIM_SPEED = 2.5  # m/s
@@ -64,7 +62,6 @@ PATH_ANIM_INSTANCES = 3  # number of animated ghosts shown along the path
 PATH_ANIM_LINE_ENABLED = True
 PATH_LINE_COLOR = (1.0, 0.55, 0.1, 1.0)
 PATH_LINE_THICKNESS = 5.0
-PATH_GHOST_SKIP_START = 5  # deprecated (count-based); use offsets below
 PATH_GHOST_START_OFFSET_M = 0.90
 PATH_GHOST_END_MARGIN_M = 0.05
 PATH_GHOST_FRACTION = 0.25  # draw only this fraction of sampled ghost poses (0,1]

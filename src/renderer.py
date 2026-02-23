@@ -32,12 +32,9 @@ from config import (
     PATH_ANIM_SPEED,
     PATH_LINE_COLOR,
     PATH_LINE_SAMPLE_SPACING_M,
-    PATH_LINE_STRIDE,
     PATH_LINE_THICKNESS,
     PATH_MARKER_SPACING_M,
     PATH_MODE_DEFAULT,
-    PATH_POSE_STRIDE,
-    PATH_GHOST_SKIP_START,
     PATH_GHOST_START_OFFSET_M,
     PATH_GHOST_END_MARGIN_M,
     PATH_GHOST_FRACTION,
@@ -116,8 +113,6 @@ class Renderer:
         self.path_mode: str = (
             PATH_MODE_DEFAULT  # poses | poses_line | planes | animated
         )
-        self.pose_stride: int = PATH_POSE_STRIDE
-        self.line_stride: int = PATH_LINE_STRIDE
         self.marker_spacing_m: float = max(0.05, float(PATH_MARKER_SPACING_M))
         self.line_sample_spacing_m: float = max(0.05, float(PATH_LINE_SAMPLE_SPACING_M))
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
@@ -1357,14 +1352,6 @@ class Renderer:
         if mode not in ("poses", "poses_line", "planes", "animated"):
             return
         self.path_mode = mode
-
-    def set_pose_stride(self, stride: int) -> None:
-        """Render pose ghosts at every Nth pose (stride)."""
-        self.pose_stride = max(1, int(stride))
-
-    def set_line_stride(self, stride: int) -> None:
-        """Render pose+line ghosts at every Nth pose (stride)."""
-        self.line_stride = max(1, int(stride))
 
     def set_marker_spacing(self, spacing_m: float) -> None:
         """Set distance-based spacing for path marker projections."""
