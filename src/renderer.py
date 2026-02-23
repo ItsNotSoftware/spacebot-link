@@ -502,6 +502,130 @@ class Renderer:
             np_line.setDepthTest(False)
             return np_line
 
+        def _make_endpoint_markers() -> Optional[NodePath]:
+            """Draw start/end markers to improve path readability."""
+            if len(line_poses) < 2:
+                return None
+            segs = LineSegs("path_line_endpoints")
+            segs.setThickness(max(2.0, PATH_LINE_THICKNESS - 0.5))
+            (sx, sy, sz), _ = line_poses[0]
+            (ex, ey, ez), _ = line_poses[-1]
+            ring_r_start = 0.09
+            ring_r_end = 0.13
+            ring_steps = 18
+            # Start marker: cyan ring.
+            segs.setColor(0.15, 0.92, 1.0, 0.95)
+            for i in range(ring_steps + 1):
+                t = (2.0 * pi * i) / ring_steps
+                x = sx + ring_r_start * cos(t)
+                y = sy + ring_r_start * sin(t)
+                z = sz + 0.015
+                if i == 0:
+                    segs.moveTo(x, y, z)
+                else:
+                    segs.drawTo(x, y, z)
+            # End marker: larger ring + crosshair.
+            segs.setColor(1.0, 0.96, 0.92, 0.98)
+            for i in range(ring_steps + 1):
+                t = (2.0 * pi * i) / ring_steps
+                x = ex + ring_r_end * cos(t)
+                y = ey + ring_r_end * sin(t)
+                z = ez + 0.02
+                if i == 0:
+                    segs.moveTo(x, y, z)
+                else:
+                    segs.drawTo(x, y, z)
+            arm = 0.07
+            segs.moveTo(ex - arm, ey, ez + 0.02)
+            segs.drawTo(ex + arm, ey, ez + 0.02)
+            segs.moveTo(ex, ey - arm, ez + 0.02)
+            segs.drawTo(ex, ey + arm, ez + 0.02)
+            node = segs.create()
+            if node is None:
+                return None
+            np_markers = self.base.render.attachNewNode(node)
+            np_markers.setDepthWrite(False)
+            np_markers.setDepthTest(False)
+            return np_markers
+
+        def _make_direction_chevrons() -> Optional[NodePath]:
+            """Draw small chevrons along the line to indicate travel direction."""
+            if len(line_poses) < 2:
+                return None
+            # Build cumulative distances on the rendered line.
+            cumulative = [0.0]
+            total = 0.0
+            for i in range(1, len(line_poses)):
+                (x1, y1, z1), _ = line_poses[i - 1]
+                (x2, y2, z2), _ = line_poses[i]
+                d = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
+                total += d
+                cumulative.append(total)
+            if total < 0.35:
+                return None
+
+            def _sample_at(dist: float) -> Tuple[Vec3, Vec3]:
+                dist = max(0.0, min(total, dist))
+                seg_idx = 0
+                while seg_idx + 1 < len(cumulative) and cumulative[seg_idx + 1] < dist:
+                    seg_idx += 1
+                if seg_idx + 1 >= len(line_poses):
+                    seg_idx = max(0, len(line_poses) - 2)
+                d0 = cumulative[seg_idx]
+                d1 = cumulative[seg_idx + 1]
+                span = max(1e-6, d1 - d0)
+                u = (dist - d0) / span
+                (x1, y1, z1), _ = line_poses[seg_idx]
+                (x2, y2, z2), _ = line_poses[seg_idx + 1]
+                p = Vec3(
+                    x1 + (x2 - x1) * u,
+                    y1 + (y2 - y1) * u,
+                    z1 + (z2 - z1) * u,
+                )
+                tangent = Vec3(x2 - x1, y2 - y1, z2 - z1)
+                if tangent.length_squared() < 1e-8:
+                    tangent = Vec3(0, 1, 0)
+                tangent.normalize()
+                return p, tangent
+
+            segs = LineSegs("path_line_chevrons")
+            segs.setThickness(max(1.5, PATH_LINE_THICKNESS - 1.0))
+            spacing = 0.55
+            start = min(0.35, 0.2 * total)
+            end = max(start, total - 0.25)
+            d = start
+            while d < end:
+                p, tangent = _sample_at(d)
+                progress = d / max(1e-6, total)
+                # Use a stable frame for the chevron plane.
+                up = Vec3(0, 0, 1)
+                side = tangent.cross(up)
+                if side.length_squared() < 1e-6:
+                    side = tangent.cross(Vec3(1, 0, 0))
+                if side.length_squared() < 1e-6:
+                    d += spacing
+                    continue
+                side.normalize()
+                chevron_len = 0.11
+                chevron_w = 0.07
+                apex = p + tangent * (0.5 * chevron_len) + Vec3(0, 0, 0.01)
+                tail = p - tangent * (0.5 * chevron_len) + Vec3(0, 0, 0.01)
+                left = tail + side * chevron_w
+                right = tail - side * chevron_w
+                alpha = max(0.35, 0.95 - 0.40 * progress)
+                segs.setColor(1.0, 1.0, 1.0, alpha)
+                segs.moveTo(left)
+                segs.drawTo(apex)
+                segs.drawTo(right)
+                d += spacing
+            node = segs.create()
+            if node is None:
+                return None
+            np_chev = self.base.render.attachNewNode(node)
+            np_chev.setDepthWrite(False)
+            np_chev.setDepthTest(False)
+            return np_chev
+
         def _risk_to_color(risk: float) -> Tuple[float, float, float, float]:
             risk = max(0.0, min(1.0, float(risk)))
             red = (0.95, 0.22, 0.20, 1.0)
@@ -538,7 +662,9 @@ class Renderer:
                 brighten = 1.0 - 0.12 * progress
                 return (r * brighten, g * brighten, b * brighten, alpha)
         inner = _make_layer("path_line_inner", PATH_LINE_THICKNESS, _inner_color)
-        for idx, child in enumerate((outer, inner)):
+        endpoint_markers = _make_endpoint_markers()
+        chevrons = _make_direction_chevrons()
+        for idx, child in enumerate((outer, inner, endpoint_markers, chevrons)):
             if child is None:
                 continue
             child.reparentTo(container)
@@ -1126,6 +1252,16 @@ class Renderer:
             ghost.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])
             ghost.setBin("fixed", 5)
             ghost.setDepthWrite(False)
+            # Keep ghosts neutral, but improve readability with progression-based fade/scale.
+            t = (idx / float(last_idx)) if last_idx > 0 else 1.0
+            alpha = max(0.22, 0.55 - 0.28 * t)
+            scale = 0.90 + 0.28 * t
+            if idx == last_idx:
+                alpha = 0.95
+                scale = max(scale, 1.22)
+            ghost.setTransparency(TransparencyAttrib.MAlpha)
+            ghost.setColorScale(1.0, 1.0, 1.0, alpha)
+            ghost.setScale(scale)
             self._path_markers.append(ghost)
 
         if self.path_mode == "poses_line":
