@@ -127,6 +127,27 @@ class UI:
         imgui.text_disabled("|")
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
+        path_goodness = status.get("path_goodness")
+        if path_goodness is not None:
+            try:
+                q = max(0.0, min(1.0, float(path_goodness)))
+                if q < 0.5:
+                    t = q / 0.5
+                    c0 = (0.95, 0.22, 0.20, 1.0)
+                    c1 = (1.00, 0.78, 0.10, 1.0)
+                else:
+                    t = (q - 0.5) / 0.5
+                    c0 = (1.00, 0.78, 0.10, 1.0)
+                    c1 = (0.22, 0.92, 0.38, 1.0)
+                quality_color = tuple(
+                    c0[i] + (c1[i] - c0[i]) * t for i in range(4)
+                )
+                imgui.same_line()
+                imgui.text_disabled("|")
+                imgui.same_line()
+                imgui.text_colored(quality_color, f"Path goodness: {q:.2f}")
+            except Exception:
+                pass
         occluded_bool = _parse_bool_flag(status.get("octomap_occluded"))
         if occluded_bool is not None:
             imgui.same_line()
@@ -212,6 +233,12 @@ class UI:
                 if tip is not None:
                     fx, fy, fz = tip
                     imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
+            q = status.get("path_goodness")
+            if q is not None:
+                try:
+                    imgui.text(f"  path_goodness (MC): {float(q):.3f}")
+                except Exception:
+                    imgui.text(f"  path_goodness (MC): {q}")
             imgui.end_child()
 
         imgui.spacing()
