@@ -25,9 +25,6 @@ from config import (
     TOPIC_PATH,
     TOPIC_POSE,
     TOPIC_PATH_QUALITY,
-    TOPIC_PATH_EXEC_SUMMARY_VEL,
-    TOPIC_PATH_EXEC_SUMMARY_FORCE,
-    PATH_QUALITY_CSV_ENABLED,
     default_cmd_endpoint,
     default_gltf_model,
     default_image_endpoint,
@@ -121,13 +118,6 @@ class SpacebotLinkApp(ShowBase):
         self._last_floor_height: Optional[str] = None
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
         self._last_path_quality: Optional[Dict[str, Any]] = None
-        self._last_exec_summary_by_topic: Dict[str, Dict[str, Any]] = {}
-        self._csv_header_printed: bool = False
-        self._run_seq: int = 0
-        self._pending_run_id: Optional[int] = None
-        self._pending_run_started_at: Optional[float] = None
-        self._pending_run_quality: Optional[Dict[str, Any]] = None
-        self._csv_summary_topic_locked: Optional[str] = None
         self._octomap_proc: Optional[subprocess.Popen] = None
         self._octomap_socket: Optional[zmq.Socket] = None
         self._gamepad_proc: Optional[subprocess.Popen] = None
@@ -164,12 +154,29 @@ class SpacebotLinkApp(ShowBase):
         self._start_gamepad_remote_process()
         self.renderer.set_avatar_color(AVATAR_COLOR_VISIBLE)
 
+    @staticmethod
+    def _extract_path_goodness(payload: Dict[str, Any]) -> Optional[float]:
+        """Read path-goodness from payload, with backward-compatible fallback."""
+        raw = payload.get("path_goodness", payload.get("heuristic"))
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except Exception:
+            return None
+
     # ---- tasks ----
     def _bus_task(self, task: PythonTask) -> int:
         """Poll ZMQ sockets to keep sensor/image caches current."""
         self.bus_sensors.poll(100)
         self.bus_images.poll(100)
-        self._maybe_log_path_quality_csv()
+        payload = self.bus_sensors.get(TOPIC_PATH_QUALITY)
+        if isinstance(payload, dict) and payload != self._last_path_quality:
+            self._last_path_quality = payload
+            try:
+                self.renderer.set_path_goodness(self._extract_path_goodness(payload))
+                if self.ui.mode != "Follow Mode":
+                    self._rerender_path()
+            except Exception:
+                pass
         return Task.cont
 
     def _camera_task(self, task: PythonTask) -> int:
@@ -478,130 +485,7 @@ class SpacebotLinkApp(ShowBase):
             poses = self._prepend_robot_pose_if_needed(poses)
             self.renderer.render_path_markers(poses)
             self._last_path_poses = poses
-            # Start a new run only if no run is already active.
-            # Mid-trajectory path updates should not create extra CSV rows.
-            if self._pending_run_id is None:
-                self._run_seq += 1
-                self._pending_run_id = self._run_seq
-                self._pending_run_started_at = None
-                self._pending_run_quality = None
         return Task.cont
-
-    def _maybe_log_path_quality_csv(self) -> None:
-        """Print one final CSV line per path run based on final execution summary."""
-        if not PATH_QUALITY_CSV_ENABLED:
-            return
-
-        payload = self.bus_sensors.get(TOPIC_PATH_QUALITY)
-        if isinstance(payload, dict) and payload != self._last_path_quality:
-            self._last_path_quality = payload
-            if self._pending_run_id is not None:
-                self._pending_run_quality = payload
-
-        if self._pending_run_id is None:
-            return
-
-        summary_to_log: Optional[Dict[str, Any]] = None
-        for topic in (
-            TOPIC_PATH_EXEC_SUMMARY_VEL,
-            TOPIC_PATH_EXEC_SUMMARY_FORCE,
-        ):
-            if (
-                self._csv_summary_topic_locked is not None
-                and topic != self._csv_summary_topic_locked
-            ):
-                continue
-            summary = self.bus_sensors.get(topic)
-            if not isinstance(summary, dict):
-                continue
-            if self._last_exec_summary_by_topic.get(topic) == summary:
-                continue
-            self._last_exec_summary_by_topic[topic] = summary
-            if self._csv_summary_topic_locked is None:
-                self._csv_summary_topic_locked = topic
-            summary_to_log = summary
-            break
-
-        quality = self._pending_run_quality or self._last_path_quality
-
-        if summary_to_log is not None and quality:
-            header, line = self._format_path_quality_csv(quality, summary_to_log)
-            if line:
-                if not self._csv_header_printed:
-                    print(header)
-                    self._csv_header_printed = True
-                print(line)
-            self._pending_run_id = None
-            self._pending_run_started_at = None
-            self._pending_run_quality = None
-            return
-
-    @staticmethod
-    def _format_path_quality_csv(
-        quality: Dict[str, Any], summary: Dict[str, Any]
-    ) -> tuple[str, str]:
-        def _float(value: Any) -> float:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return 0.0
-
-        clearance = _float(quality.get("clearance_score"))
-        narrow = _float(quality.get("narrow_score"))
-        turn = _float(quality.get("turn_score"))
-        efficiency = _float(quality.get("efficiency_score"))
-        min_clearance = _float(quality.get("min_clearance_m"))
-        narrow_fraction = _float(quality.get("narrow_fraction"))
-        max_turn_rad = _float(quality.get("max_turn_rad"))
-        path_length = _float(quality.get("path_length_m", summary.get("planned_length")))
-        straight_dist = _float(quality.get("straight_dist_m"))
-        detour_ratio = _float(quality.get("detour_ratio"))
-        if detour_ratio <= 0.0:
-            detour_ratio = path_length / straight_dist if straight_dist > 1e-6 else 1.0
-
-        planned = path_length
-        executed = _float(summary.get("executed_length"))
-        rms = _float(summary.get("rms_tracking_error"))
-
-        nrc = 0
-        mev = _float(summary.get("mev", quality.get("mev", 0.0)))
-
-        width = 12
-        labels = (
-            "CLR",
-            "NAR",
-            "TRN",
-            "EFF",
-            "MCLR",
-            "NFR",
-            "MTR",
-            "PLN",
-            "STD",
-            "DTR",
-            "EXE",
-            "RMS",
-            "NRC",
-            "MEV",
-        )
-        header = "".join(f"{label:>{width}}" for label in labels)
-        values = (
-            f"{clearance:>{width}.5f}",
-            f"{narrow:>{width}.5f}",
-            f"{turn:>{width}.5f}",
-            f"{efficiency:>{width}.5f}",
-            f"{min_clearance:>{width}.5f}",
-            f"{narrow_fraction:>{width}.5f}",
-            f"{max_turn_rad:>{width}.5f}",
-            f"{planned:>{width}.5f}",
-            f"{straight_dist:>{width}.5f}",
-            f"{detour_ratio:>{width}.5f}",
-            f"{executed:>{width}.5f}",
-            f"{rms:>{width}.5f}",
-            f"{nrc:>{width}d}",
-            f"{mev:>{width}.5f}",
-        )
-        line = "".join(values)
-        return header, line
 
     def _prepend_robot_pose_if_needed(self, poses: List) -> List:
         """Ensure path lines originate at the current robot pose."""
@@ -642,6 +526,12 @@ class SpacebotLinkApp(ShowBase):
             "waypoint_count": len(self.nav.state.follow_path_points),
             "follow_tip": follow_tip,
             "path_pose_count": len(self._last_path_poses),
+            "path_quality": self._last_path_quality,
+            "path_goodness": (
+                self._extract_path_goodness(self._last_path_quality)
+                if isinstance(self._last_path_quality, dict)
+                else None
+            ),
             "last_goal_ros": (
                 panda_pose_to_ros_tuple(self.nav.state.last_goal_pose)
                 if self.nav.state.last_goal_pose

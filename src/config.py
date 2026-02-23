@@ -80,8 +80,6 @@ FLOOR_LINE_COLOR = (0.0, 1.0, 1.0, 1.0)
 FLOOR_SHADOW_THICKNESS = 3.0
 FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
-PATH_QUALITY_CSV_ENABLED = True
-
 # Orientation preview (Panda3D overlay)
 ORIENT_PREVIEW_ENABLED = True
 # Display region: (left, right, bottom, top) in normalized window coords.

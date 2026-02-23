@@ -107,6 +107,7 @@ class Renderer:
         self.pose_stride: int = PATH_POSE_STRIDE
         self.line_stride: int = PATH_LINE_STRIDE
         self.anim_speed: float = PATH_ANIM_SPEED  # units per second
+        self._path_goodness: Optional[float] = None
 
         self._init_lights()
         self._make_bg_card(initial_aspect=9 / 16)
@@ -467,14 +468,14 @@ class Renderer:
     def _draw_path_line(
         self,
         poses: List[PoseTuple],
-        color: Tuple[float, float, float, float] = PATH_LINE_COLOR,
+        color: Optional[Tuple[float, float, float, float]] = None,
     ) -> None:
         """Draw a line strip through all poses to preserve path continuity."""
         if len(poses) < 2:
             return
         segs = LineSegs("path_line")
         segs.setThickness(PATH_LINE_THICKNESS)
-        segs.setColor(*color)
+        segs.setColor(*(color or self._path_line_color()))
         first = True
         for pos, _ in poses:
             x, y, z = pos
@@ -491,6 +492,39 @@ class Renderer:
         np_line.setDepthWrite(False)
         np_line.setDepthTest(False)
         self._path_line = np_line
+
+    def _path_line_color(self) -> Tuple[float, float, float, float]:
+        """Return line color derived from path goodness, or the default if unavailable."""
+        if self._path_goodness is None:
+            return PATH_LINE_COLOR
+        r, g, b, _ = self._path_tint_rgba()
+        return (r, g, b, PATH_LINE_COLOR[3])
+
+    def _path_tint_rgba(self) -> Tuple[float, float, float, float]:
+        """Map path goodness [0,1] to a red-yellow-green tint."""
+        if self._path_goodness is None:
+            return (1.0, 1.0, 1.0, 1.0)
+        goodness = max(0.0, min(1.0, float(self._path_goodness)))
+        red = (0.95, 0.22, 0.20, 1.0)
+        yellow = (1.00, 0.78, 0.10, 1.0)
+        green = (0.22, 0.92, 0.38, 1.0)
+        if goodness < 0.5:
+            t = goodness / 0.5
+            c0, c1 = red, yellow
+        else:
+            t = (goodness - 0.5) / 0.5
+            c0, c1 = yellow, green
+        return tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))  # type: ignore[return-value]
+
+    def set_path_goodness(self, goodness: Optional[float]) -> None:
+        """Store latest path goodness score used to tint path visuals."""
+        if goodness is None:
+            self._path_goodness = None
+            return
+        try:
+            self._path_goodness = max(0.0, min(1.0, float(goodness)))
+        except Exception:
+            self._path_goodness = None
 
     def _make_plane_proto(self) -> Optional[NodePath]:
         """Build an outlined + translucent plane for pose visualization."""
@@ -598,7 +632,6 @@ class Renderer:
                 except Exception:
                     pass
             self._anim_nps = self._anim_nps[:required]
-
         self._anim_path = poses
         self._anim_dist = [0.0]
         total = 0.0
@@ -879,7 +912,7 @@ class Renderer:
             self._update_animation_path(poses)
             # Keep a thin line for context so the user sees the full intended path.
             if self.anim_line_enabled:
-                self._draw_path_line(poses, color=PATH_LINE_COLOR)
+                self._draw_path_line(poses)
             return
 
         if self.path_mode == "planes":
