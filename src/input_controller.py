@@ -153,8 +153,9 @@ class _AxisFilter:
         self._peak: float = 0.0
 
     def apply(self, raw: float) -> float:
-        value = self._autoscale(raw)
-        value = self._apply_deadzone(value)
+        # Apply deadzone before autoscale so small stick drift is never amplified.
+        value = self._apply_deadzone(raw)
+        value = self._autoscale(value)
         if self.curve > 1.0:
             value = math.copysign(abs(value) ** self.curve, value)
         if self.smoothing > 0.0:
@@ -165,9 +166,10 @@ class _AxisFilter:
         return value
 
     def _apply_deadzone(self, value: float) -> float:
-        if abs(value) < self.deadzone:
+        deadzone = max(0.0, min(0.999, self.deadzone))
+        if abs(value) <= deadzone:
             return 0.0
-        scaled = (abs(value) - self.deadzone) / (1.0 - self.deadzone)
+        scaled = (abs(value) - deadzone) / (1.0 - deadzone)
         return scaled * (1.0 if value >= 0.0 else -1.0)
 
     def _autoscale(self, value: float) -> float:

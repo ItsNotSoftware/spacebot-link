@@ -80,7 +80,7 @@ FLOOR_LINE_COLOR = (0.0, 1.0, 1.0, 1.0)
 FLOOR_SHADOW_THICKNESS = 3.0
 FLOOR_LINE_THICKNESS = 3.0
 FLOOR_PROJECTION_ENABLED = True
-PATH_QUALITY_CSV_ENABLED = False
+PATH_QUALITY_CSV_ENABLED = True
 
 # Orientation preview (Panda3D overlay)
 ORIENT_PREVIEW_ENABLED = True
@@ -96,7 +96,7 @@ ORIENT_PREVIEW_AVATAR_COLOR = AVATAR_COLOR_VISIBLE
 ORIENT_PREVIEW_EXTRA_YAW_DEG = 0.0
 
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
-CAMERA_FORWARD_OFFSET_M = 0
+CAMERA_FORWARD_OFFSET_M = 0.07
 CAMERA_UP_OFFSET_M = 0.07
 # ROS -> Panda: (x, y, z) = (-Y, X, Z). Camera pose is (0.36, 0, 0.13) in ROS.
 AVATAR_CAMERA_OFFSET = (0.0, CAMERA_FORWARD_OFFSET_M, CAMERA_UP_OFFSET_M)
@@ -116,8 +116,8 @@ LEFT_BUTTON = KeyboardButton.ascii_key("a")
 RIGHT_BUTTON = KeyboardButton.ascii_key("d")
 UP_BUTTON = KeyboardButton.ascii_key("e")
 DOWN_BUTTON = KeyboardButton.ascii_key("q")
-UP_BUTTON_ALT = KeyboardButton.space()
-DOWN_BUTTON_ALT = KeyboardButton.lshift()
+UP_BUTTON_ALT = DOWN_BUTTON
+DOWN_BUTTON_ALT = UP_BUTTON
 PITCH_UP_BUTTON = KeyboardButton.ascii_key("i")
 PITCH_DOWN_BUTTON = KeyboardButton.ascii_key("k")
 YAW_LEFT_BUTTON = KeyboardButton.ascii_key("u")
@@ -133,9 +133,9 @@ ARROW_RIGHT_BUTTON = KeyboardButton.right()
 
 # Gamepad control tuning (daemon input)
 GAMEPAD_ENABLED = True
-GAMEPAD_MOVE_DEADZONE = 0.20
-GAMEPAD_LOOK_DEADZONE = 0.20
-GAMEPAD_TRIGGER_DEADZONE = 0.08
+GAMEPAD_MOVE_DEADZONE = 0.30
+GAMEPAD_LOOK_DEADZONE = 0.40
+GAMEPAD_TRIGGER_DEADZONE = 0.10
 GAMEPAD_MOVE_CURVE = 1.6
 GAMEPAD_LOOK_CURVE = 1.8
 GAMEPAD_MOVE_SMOOTHING = 0.2
