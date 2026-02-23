@@ -38,10 +38,20 @@ from config import (
     PATH_MODE_DEFAULT,
     PATH_POSE_STRIDE,
     PATH_GHOST_SKIP_START,
+    PATH_GHOST_START_OFFSET_M,
+    PATH_GHOST_END_MARGIN_M,
+    PATH_GHOST_FRACTION,
     PATH_PLANE_SIZE,
     PATH_PLANE_OUTLINE_COLOR,
     PATH_PLANE_FILL_ALPHA,
     PATH_PLANE_THICKNESS,
+    PATH_CHEVRON_ENABLED,
+    PATH_CHEVRON_SPACING_M,
+    PATH_CHEVRON_LENGTH_M,
+    PATH_CHEVRON_WIDTH_M,
+    PATH_CHEVRON_COLOR,
+    PATH_CHEVRON_START_OFFSET_M,
+    PATH_CHEVRON_END_MARGIN_M,
     AVATAR_CAMERA_OFFSET,
     FLOOR_SHADOW_BASE_RADIUS,
     FLOOR_SHADOW_INNER_RATIO,
@@ -508,33 +518,9 @@ class Renderer:
                 return None
             segs = LineSegs("path_line_endpoints")
             segs.setThickness(max(2.0, PATH_LINE_THICKNESS - 0.5))
-            (sx, sy, sz), _ = line_poses[0]
             (ex, ey, ez), _ = line_poses[-1]
-            ring_r_start = 0.09
-            ring_r_end = 0.13
-            ring_steps = 18
-            # Start marker: cyan ring.
-            segs.setColor(0.15, 0.92, 1.0, 0.95)
-            for i in range(ring_steps + 1):
-                t = (2.0 * pi * i) / ring_steps
-                x = sx + ring_r_start * cos(t)
-                y = sy + ring_r_start * sin(t)
-                z = sz + 0.015
-                if i == 0:
-                    segs.moveTo(x, y, z)
-                else:
-                    segs.drawTo(x, y, z)
-            # End marker: larger ring + crosshair.
+            # End marker: crosshair only (no final ring).
             segs.setColor(1.0, 0.96, 0.92, 0.98)
-            for i in range(ring_steps + 1):
-                t = (2.0 * pi * i) / ring_steps
-                x = ex + ring_r_end * cos(t)
-                y = ey + ring_r_end * sin(t)
-                z = ez + 0.02
-                if i == 0:
-                    segs.moveTo(x, y, z)
-                else:
-                    segs.drawTo(x, y, z)
             arm = 0.07
             segs.moveTo(ex - arm, ey, ez + 0.02)
             segs.drawTo(ex + arm, ey, ez + 0.02)
@@ -552,6 +538,8 @@ class Renderer:
             """Draw small chevrons along the line to indicate travel direction."""
             if len(line_poses) < 2:
                 return None
+            if not bool(PATH_CHEVRON_ENABLED):
+                return None
             # Build cumulative distances on the rendered line.
             cumulative = [0.0]
             total = 0.0
@@ -564,7 +552,7 @@ class Renderer:
             if total < 0.35:
                 return None
 
-            def _sample_at(dist: float) -> Tuple[Vec3, Vec3]:
+            def _sample_at(dist: float) -> Tuple[Vec3, Vec3, Vec3]:
                 dist = max(0.0, min(total, dist))
                 seg_idx = 0
                 while seg_idx + 1 < len(cumulative) and cumulative[seg_idx + 1] < dist:
@@ -582,38 +570,81 @@ class Renderer:
                     y1 + (y2 - y1) * u,
                     z1 + (z2 - z1) * u,
                 )
+                # Derive local orientation hints from the interpolated pose orientation.
+                try:
+                    (_, (h1, p1, r1)) = line_poses[seg_idx]
+                    (_, (h2, p2, r2)) = line_poses[seg_idx + 1]
+                    q_plane = Quat()
+                    q_plane.setHpr(
+                        Vec3(
+                            h1 + (h2 - h1) * u,
+                            p1 + (p2 - p1) * u,
+                            r1 + (r2 - r1) * u,
+                        )
+                    )
+                    plane_normal = q_plane.xform(Vec3(0, 0, 1))
+                    side_hint = q_plane.xform(Vec3(1, 0, 0))
+                except Exception:
+                    plane_normal = Vec3(0, 0, 1)
+                    side_hint = Vec3(1, 0, 0)
+                if plane_normal.length_squared() < 1e-8:
+                    plane_normal = Vec3(0, 0, 1)
+                else:
+                    plane_normal.normalize()
+                if side_hint.length_squared() < 1e-8:
+                    side_hint = Vec3(1, 0, 0)
+                else:
+                    side_hint.normalize()
                 tangent = Vec3(x2 - x1, y2 - y1, z2 - z1)
                 if tangent.length_squared() < 1e-8:
                     tangent = Vec3(0, 1, 0)
                 tangent.normalize()
-                return p, tangent
+                # Build a local chevron plane that contains the true path tangent, and orient
+                # its "width" using the robot pose side axis when possible.
+                side = side_hint - tangent * side_hint.dot(tangent)
+                if side.length_squared() < 1e-8:
+                    side = tangent.cross(plane_normal)
+                if side.length_squared() < 1e-8:
+                    side = tangent.cross(Vec3(0, 0, 1))
+                if side.length_squared() < 1e-8:
+                    side = tangent.cross(Vec3(1, 0, 0))
+                if side.length_squared() < 1e-8:
+                    side = Vec3(1, 0, 0)
+                side.normalize()
+                plane_normal_eff = side.cross(tangent)
+                if plane_normal_eff.length_squared() < 1e-8:
+                    plane_normal_eff = plane_normal
+                else:
+                    plane_normal_eff.normalize()
+                return p, tangent, plane_normal_eff
 
             segs = LineSegs("path_line_chevrons")
             segs.setThickness(max(1.5, PATH_LINE_THICKNESS - 1.0))
-            spacing = 0.55
-            start = min(0.35, 0.2 * total)
-            end = max(start, total - 0.25)
+            spacing = max(0.20, float(PATH_CHEVRON_SPACING_M))
+            start = max(0.0, float(PATH_CHEVRON_START_OFFSET_M))
+            end_margin = max(0.0, float(PATH_CHEVRON_END_MARGIN_M))
+            end = max(start, total - end_margin)
             d = start
+            cr, cg, cb, ca = PATH_CHEVRON_COLOR
             while d < end:
-                p, tangent = _sample_at(d)
+                p, tangent, plane_normal = _sample_at(d)
                 progress = d / max(1e-6, total)
-                # Use a stable frame for the chevron plane.
-                up = Vec3(0, 0, 1)
-                side = tangent.cross(up)
+                side = tangent.cross(plane_normal)
                 if side.length_squared() < 1e-6:
                     side = tangent.cross(Vec3(1, 0, 0))
                 if side.length_squared() < 1e-6:
                     d += spacing
                     continue
                 side.normalize()
-                chevron_len = 0.11
-                chevron_w = 0.07
-                apex = p + tangent * (0.5 * chevron_len) + Vec3(0, 0, 0.01)
-                tail = p - tangent * (0.5 * chevron_len) + Vec3(0, 0, 0.01)
+                chevron_len = max(0.02, float(PATH_CHEVRON_LENGTH_M))
+                chevron_w = max(0.01, float(PATH_CHEVRON_WIDTH_M))
+                plane_lift = plane_normal * 0.01
+                apex = p + tangent * (0.5 * chevron_len) + plane_lift
+                tail = p - tangent * (0.5 * chevron_len) + plane_lift
                 left = tail + side * chevron_w
                 right = tail - side * chevron_w
-                alpha = max(0.35, 0.95 - 0.40 * progress)
-                segs.setColor(1.0, 1.0, 1.0, alpha)
+                alpha = max(0.35, (0.95 - 0.40 * progress) * max(0.05, float(ca)))
+                segs.setColor(float(cr), float(cg), float(cb), alpha)
                 segs.moveTo(left)
                 segs.drawTo(apex)
                 segs.drawTo(right)
@@ -760,11 +791,17 @@ class Renderer:
             mapped.append(max(0.0, min(1.0, val)))
         return mapped
 
-    def _resample_poses_by_distance(self, poses: List[PoseTuple]) -> List[PoseTuple]:
+    def _resample_poses_by_distance(
+        self,
+        poses: List[PoseTuple],
+        spacing_m: Optional[float] = None,
+        start_offset_m: float = 0.0,
+        end_margin_m: float = 0.0,
+    ) -> List[PoseTuple]:
         """Resample path poses at fixed arc-length spacing for consistent preview density."""
         if len(poses) <= 2:
             return list(poses)
-        spacing = max(0.05, float(self.marker_spacing_m))
+        spacing = max(0.05, float(self.marker_spacing_m if spacing_m is None else spacing_m))
 
         cumulative = [0.0]
         total = 0.0
@@ -778,12 +815,15 @@ class Renderer:
         if total <= 1e-6:
             return [poses[0], poses[-1]] if poses[0] != poses[-1] else [poses[0]]
 
-        targets: List[float] = [0.0]
-        t = spacing
-        while t < total - 1e-6:
+        start_s = max(0.0, float(start_offset_m))
+        end_s = max(start_s, total - max(0.0, float(end_margin_m)))
+        targets: List[float] = []
+        t = start_s
+        while t < end_s - 1e-6:
             targets.append(t)
             t += spacing
-        if targets[-1] != total:
+        # Always include the final pose so the goal marker remains visible/stable.
+        if not targets or abs(targets[-1] - total) > 1e-6:
             targets.append(total)
 
         out: List[PoseTuple] = []
@@ -811,6 +851,26 @@ class Renderer:
                 r1 + (r2 - r1) * u,
             )
             out.append((pos, hpr))
+        return out
+
+    def _select_marker_subset(
+        self, marker_poses: List[PoseTuple], fraction: float
+    ) -> List[PoseTuple]:
+        """Keep a deterministic subset of marker poses (always preserving the last pose)."""
+        if len(marker_poses) <= 1:
+            return list(marker_poses)
+        try:
+            frac = float(fraction)
+        except Exception:
+            frac = 1.0
+        frac = max(0.01, min(1.0, frac))
+        if frac >= 0.999:
+            return list(marker_poses)
+        # Since poses are already evenly spaced by distance, stride-based thinning is stable.
+        stride = max(1, int(round(1.0 / frac)))
+        out = [pose for i, pose in enumerate(marker_poses[:-1]) if (i % stride) == 0]
+        if not out or out[-1] != marker_poses[-1]:
+            out.append(marker_poses[-1])
         return out
 
     def _make_plane_proto(self) -> Optional[NodePath]:
@@ -1216,12 +1276,13 @@ class Renderer:
             proto_plane = self._plane_proto
             if proto_plane is None:
                 return
-            marker_poses = self._resample_poses_by_distance(poses)
+            marker_poses = self._resample_poses_by_distance(
+                poses,
+                start_offset_m=PATH_GHOST_START_OFFSET_M,
+                end_margin_m=PATH_GHOST_END_MARGIN_M,
+            )
             last_idx = len(marker_poses) - 1
-            skip = max(0, int(PATH_GHOST_SKIP_START))
             for idx, (pos, hpr) in enumerate(marker_poses):
-                if idx < skip and idx != last_idx:
-                    continue
                 plane = proto_plane.copyTo(self.base.render)
                 plane.setPos(self.base.render, pos[0], pos[1], pos[2])
                 plane.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])
@@ -1241,12 +1302,14 @@ class Renderer:
         if proto is None:
             return
 
-        marker_poses = self._resample_poses_by_distance(poses)
+        marker_poses = self._resample_poses_by_distance(
+            poses,
+            start_offset_m=PATH_GHOST_START_OFFSET_M,
+            end_margin_m=PATH_GHOST_END_MARGIN_M,
+        )
+        marker_poses = self._select_marker_subset(marker_poses, PATH_GHOST_FRACTION)
         last_idx = len(marker_poses) - 1
-        skip = max(0, int(PATH_GHOST_SKIP_START))
         for idx, (pos, hpr) in enumerate(marker_poses):
-            if idx < skip and idx != last_idx:
-                continue
             ghost = proto.copyTo(self.base.render)
             ghost.setPos(self.base.render, pos[0], pos[1], pos[2])
             ghost.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])

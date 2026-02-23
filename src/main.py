@@ -719,7 +719,7 @@ class SpacebotLinkApp(ShowBase):
         elif self._last_path_poses:
             self.renderer.render_path_markers(self._last_path_poses)
 
-    def _refresh_path_line_style_if_needed(self, min_interval_s: float = 0.15) -> None:
+    def _refresh_path_line_style_if_needed(self, min_interval_s: float = 0.5) -> None:
         """Refresh only line style/heatmap for path-quality updates (throttled)."""
         if self.ui.mode == "Follow Mode":
             return
