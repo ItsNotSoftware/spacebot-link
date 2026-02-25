@@ -42,13 +42,6 @@ from config import (
     PATH_PLANE_OUTLINE_COLOR,
     PATH_PLANE_FILL_ALPHA,
     PATH_PLANE_THICKNESS,
-    PATH_CHEVRON_ENABLED,
-    PATH_CHEVRON_SPACING_M,
-    PATH_CHEVRON_LENGTH_M,
-    PATH_CHEVRON_WIDTH_M,
-    PATH_CHEVRON_COLOR,
-    PATH_CHEVRON_START_OFFSET_M,
-    PATH_CHEVRON_END_MARGIN_M,
     AVATAR_CAMERA_OFFSET,
     FLOOR_SHADOW_BASE_RADIUS,
     FLOOR_SHADOW_INNER_RATIO,
@@ -507,151 +500,6 @@ class Renderer:
             np_line.setDepthTest(False)
             return np_line
 
-        def _make_endpoint_markers() -> Optional[NodePath]:
-            """Draw start/end markers to improve path readability."""
-            if len(line_poses) < 2:
-                return None
-            segs = LineSegs("path_line_endpoints")
-            segs.setThickness(max(2.0, PATH_LINE_THICKNESS - 0.5))
-            (ex, ey, ez), _ = line_poses[-1]
-            # End marker: crosshair only (no final ring).
-            segs.setColor(1.0, 0.96, 0.92, 0.98)
-            arm = 0.07
-            segs.moveTo(ex - arm, ey, ez + 0.02)
-            segs.drawTo(ex + arm, ey, ez + 0.02)
-            segs.moveTo(ex, ey - arm, ez + 0.02)
-            segs.drawTo(ex, ey + arm, ez + 0.02)
-            node = segs.create()
-            if node is None:
-                return None
-            np_markers = self.base.render.attachNewNode(node)
-            np_markers.setDepthWrite(False)
-            np_markers.setDepthTest(False)
-            return np_markers
-
-        def _make_direction_chevrons() -> Optional[NodePath]:
-            """Draw small chevrons along the line to indicate travel direction."""
-            if len(line_poses) < 2:
-                return None
-            if not bool(PATH_CHEVRON_ENABLED):
-                return None
-            # Build cumulative distances on the rendered line.
-            cumulative = [0.0]
-            total = 0.0
-            for i in range(1, len(line_poses)):
-                (x1, y1, z1), _ = line_poses[i - 1]
-                (x2, y2, z2), _ = line_poses[i]
-                d = ((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2) ** 0.5
-                total += d
-                cumulative.append(total)
-            if total < 0.35:
-                return None
-
-            def _sample_at(dist: float) -> Tuple[Vec3, Vec3, Vec3]:
-                dist = max(0.0, min(total, dist))
-                seg_idx = 0
-                while seg_idx + 1 < len(cumulative) and cumulative[seg_idx + 1] < dist:
-                    seg_idx += 1
-                if seg_idx + 1 >= len(line_poses):
-                    seg_idx = max(0, len(line_poses) - 2)
-                d0 = cumulative[seg_idx]
-                d1 = cumulative[seg_idx + 1]
-                span = max(1e-6, d1 - d0)
-                u = (dist - d0) / span
-                (x1, y1, z1), _ = line_poses[seg_idx]
-                (x2, y2, z2), _ = line_poses[seg_idx + 1]
-                p = Vec3(
-                    x1 + (x2 - x1) * u,
-                    y1 + (y2 - y1) * u,
-                    z1 + (z2 - z1) * u,
-                )
-                # Derive local orientation hints from the interpolated pose orientation.
-                try:
-                    (_, (h1, p1, r1)) = line_poses[seg_idx]
-                    (_, (h2, p2, r2)) = line_poses[seg_idx + 1]
-                    q_plane = Quat()
-                    q_plane.setHpr(
-                        Vec3(
-                            h1 + (h2 - h1) * u,
-                            p1 + (p2 - p1) * u,
-                            r1 + (r2 - r1) * u,
-                        )
-                    )
-                    plane_normal = q_plane.xform(Vec3(0, 0, 1))
-                    side_hint = q_plane.xform(Vec3(1, 0, 0))
-                except Exception:
-                    plane_normal = Vec3(0, 0, 1)
-                    side_hint = Vec3(1, 0, 0)
-                if plane_normal.length_squared() < 1e-8:
-                    plane_normal = Vec3(0, 0, 1)
-                else:
-                    plane_normal.normalize()
-                if side_hint.length_squared() < 1e-8:
-                    side_hint = Vec3(1, 0, 0)
-                else:
-                    side_hint.normalize()
-                tangent = Vec3(x2 - x1, y2 - y1, z2 - z1)
-                if tangent.length_squared() < 1e-8:
-                    tangent = Vec3(0, 1, 0)
-                tangent.normalize()
-                # Build a local chevron plane that contains the true path tangent, and orient
-                # its "width" using the robot pose side axis when possible.
-                side = side_hint - tangent * side_hint.dot(tangent)
-                if side.length_squared() < 1e-8:
-                    side = tangent.cross(plane_normal)
-                if side.length_squared() < 1e-8:
-                    side = tangent.cross(Vec3(0, 0, 1))
-                if side.length_squared() < 1e-8:
-                    side = tangent.cross(Vec3(1, 0, 0))
-                if side.length_squared() < 1e-8:
-                    side = Vec3(1, 0, 0)
-                side.normalize()
-                plane_normal_eff = side.cross(tangent)
-                if plane_normal_eff.length_squared() < 1e-8:
-                    plane_normal_eff = plane_normal
-                else:
-                    plane_normal_eff.normalize()
-                return p, tangent, plane_normal_eff
-
-            segs = LineSegs("path_line_chevrons")
-            segs.setThickness(max(1.5, PATH_LINE_THICKNESS - 1.0))
-            spacing = max(0.20, float(PATH_CHEVRON_SPACING_M))
-            start = max(0.0, float(PATH_CHEVRON_START_OFFSET_M))
-            end_margin = max(0.0, float(PATH_CHEVRON_END_MARGIN_M))
-            end = max(start, total - end_margin)
-            d = start
-            cr, cg, cb, ca = PATH_CHEVRON_COLOR
-            while d < end:
-                p, tangent, plane_normal = _sample_at(d)
-                progress = d / max(1e-6, total)
-                side = tangent.cross(plane_normal)
-                if side.length_squared() < 1e-6:
-                    side = tangent.cross(Vec3(1, 0, 0))
-                if side.length_squared() < 1e-6:
-                    d += spacing
-                    continue
-                side.normalize()
-                chevron_len = max(0.02, float(PATH_CHEVRON_LENGTH_M))
-                chevron_w = max(0.01, float(PATH_CHEVRON_WIDTH_M))
-                plane_lift = plane_normal * 0.01
-                apex = p + tangent * (0.5 * chevron_len) + plane_lift
-                tail = p - tangent * (0.5 * chevron_len) + plane_lift
-                left = tail + side * chevron_w
-                right = tail - side * chevron_w
-                alpha = max(0.35, (0.95 - 0.40 * progress) * max(0.05, float(ca)))
-                segs.setColor(float(cr), float(cg), float(cb), alpha)
-                segs.moveTo(left)
-                segs.drawTo(apex)
-                segs.drawTo(right)
-                d += spacing
-            node = segs.create()
-            if node is None:
-                return None
-            np_chev = self.base.render.attachNewNode(node)
-            np_chev.setDepthWrite(False)
-            np_chev.setDepthTest(False)
-            return np_chev
-
         def _risk_to_color(risk: float) -> Tuple[float, float, float, float]:
             risk = max(0.0, min(1.0, float(risk)))
             red = (0.95, 0.22, 0.20, 1.0)
@@ -688,9 +536,7 @@ class Renderer:
                 brighten = 1.0 - 0.12 * progress
                 return (r * brighten, g * brighten, b * brighten, alpha)
         inner = _make_layer("path_line_inner", PATH_LINE_THICKNESS, _inner_color)
-        endpoint_markers = _make_endpoint_markers()
-        chevrons = _make_direction_chevrons()
-        for idx, child in enumerate((outer, inner, endpoint_markers, chevrons)):
+        for idx, child in enumerate((outer, inner)):
             if child is None:
                 continue
             child.reparentTo(container)
