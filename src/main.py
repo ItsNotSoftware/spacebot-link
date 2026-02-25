@@ -20,10 +20,13 @@ from config import (
     FRAMEBUFFER_SRGB_CFG,
     TRANSPARENCY_SORT_CFG,
     WINDOW_TITLE,
+    TOPIC_CMD_PATH,
     TOPIC_CMD_VEL,
     TOPIC_GOAL,
     TOPIC_IMAGE,
     TOPIC_PATH,
+    TOPIC_PATH_EXEC_SUMMARY_FORCE,
+    TOPIC_PATH_EXEC_SUMMARY_VEL,
     TOPIC_POSE,
     TOPIC_PATH_QUALITY,
     default_cmd_endpoint,
@@ -128,6 +131,18 @@ class SpacebotLinkApp(ShowBase):
         self._last_octomap_raw: Optional[str] = None
         self._last_avatar_state: Optional[Tuple[Optional[bool], Optional[bool]]] = None
         self._last_path_line_style_refresh_s: float = 0.0
+        self._avatar_delay_bar_pose: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
+        self._avatar_delay_bar_reset_s: float = time.monotonic()
+        self._pending_cmd_sent_s: Dict[str, float] = {}
+        self._last_cmd_latency_s: Optional[float] = None
+        self._last_cmd_latency_label: Optional[str] = None
+        self._last_cmd_sent_topic: Optional[str] = None
+        self._last_cmd_sent_s: Optional[float] = None
+        self._last_cmd_ack_s: Optional[float] = None
+        self._last_cmd_vel_echo_payload: Any = None
+        self._last_exec_summary_vel: Any = None
+        self._last_exec_summary_force: Any = None
+        self._install_cmd_publish_tracking()
 
         # UI + status
         self.ui = UI(self, self._collect_status, on_abort=self._abort_to_robot_pose)
@@ -165,11 +180,113 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             return None
 
+    def _install_cmd_publish_tracking(self) -> None:
+        """Wrap the command publisher to timestamp outgoing commands for UI latency display."""
+        orig_publish = self.cmd_pub.publish
+
+        def _tracked_publish(topic: str, data: Dict[str, Any]) -> None:
+            sent_s = time.monotonic()
+            orig_publish(topic, data)
+            self._record_cmd_sent(topic, sent_s)
+
+        # Instance-level override so all existing users (nav/input/main) are tracked.
+        self.cmd_pub.publish = _tracked_publish  # type: ignore[method-assign]
+
+    def _record_cmd_sent(self, topic: str, sent_s: float) -> None:
+        """Record an outgoing command send attempt."""
+        key = self._cmd_pending_key(topic)
+        self._pending_cmd_sent_s[key] = float(sent_s)
+        self._last_cmd_sent_topic = topic
+        self._last_cmd_sent_s = float(sent_s)
+
+    def _cmd_pending_key(self, topic: str) -> str:
+        if topic == TOPIC_CMD_VEL:
+            return "cmd_vel"
+        if topic == TOPIC_GOAL:
+            return "nav_goal"
+        if topic == TOPIC_CMD_PATH:
+            return "nav_path"
+        return topic
+
+    def _ack_pending_cmds(self, keys: Sequence[str], source_label: str) -> None:
+        """Mark the newest pending command among `keys` as acknowledged and store latency."""
+        newest_key = None
+        newest_sent = -1.0
+        for key in keys:
+            sent = self._pending_cmd_sent_s.get(key)
+            if sent is None:
+                continue
+            if sent > newest_sent:
+                newest_sent = sent
+                newest_key = key
+        if newest_key is None or newest_sent < 0.0:
+            return
+        now_s = time.monotonic()
+        self._last_cmd_latency_s = max(0.0, now_s - newest_sent)
+        self._last_cmd_latency_label = source_label
+        self._last_cmd_ack_s = now_s
+        self._pending_cmd_sent_s.pop(newest_key, None)
+
+    def _update_command_latency_tracking(self) -> None:
+        """Detect command echoes/summaries and convert them into UI latency samples."""
+        cmd_vel_echo = self.bus_sensors.get(TOPIC_CMD_VEL)
+        if cmd_vel_echo is not None and cmd_vel_echo != self._last_cmd_vel_echo_payload:
+            self._last_cmd_vel_echo_payload = cmd_vel_echo
+            self._ack_pending_cmds(("cmd_vel",), "cmd_vel echo")
+
+        exec_vel = self.bus_sensors.get(TOPIC_PATH_EXEC_SUMMARY_VEL)
+        if exec_vel is not None and exec_vel != self._last_exec_summary_vel:
+            self._last_exec_summary_vel = exec_vel
+            self._ack_pending_cmds(("nav_goal", "nav_path"), "path exec")
+
+        exec_force = self.bus_sensors.get(TOPIC_PATH_EXEC_SUMMARY_FORCE)
+        if exec_force is not None and exec_force != self._last_exec_summary_force:
+            self._last_exec_summary_force = exec_force
+            self._ack_pending_cmds(("nav_goal", "nav_path"), "path exec")
+
+        planner_path = self.bus_sensors.get(TOPIC_PATH)
+        if planner_path is not None and planner_path != getattr(self, "_last_path_data", None):
+            # Planner path updates are often the earliest visible response to goal/path commands.
+            self._ack_pending_cmds(("nav_goal", "nav_path"), "planner path")
+
+    def _last_pending_command_age_s(self) -> Optional[float]:
+        """Return age of newest still-pending command, if any."""
+        if not self._pending_cmd_sent_s:
+            return None
+        newest = max(self._pending_cmd_sent_s.values())
+        return max(0.0, time.monotonic() - newest)
+
+    def _avatar_delay_fill_progress(self, avatar_pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]) -> float:
+        """Return [0,1] progress that resets on avatar movement and fills over 3 seconds."""
+        now_s = time.monotonic()
+        prev = self._avatar_delay_bar_pose
+        moved = False
+        if prev is None:
+            moved = True
+        else:
+            (px, py, pz), (ph, pp, pr) = prev
+            (x, y, z), (h, p, r) = avatar_pose
+            moved = (
+                abs(x - px) > 1e-4
+                or abs(y - py) > 1e-4
+                or abs(z - pz) > 1e-4
+                or abs(h - ph) > 1e-3
+                or abs(p - pp) > 1e-3
+                or abs(r - pr) > 1e-3
+            )
+        if moved:
+            self._avatar_delay_bar_reset_s = now_s
+            self._avatar_delay_bar_pose = avatar_pose
+            return 0.0
+        elapsed = max(0.0, now_s - self._avatar_delay_bar_reset_s)
+        return max(0.0, min(1.0, elapsed / 3.0))
+
     # ---- tasks ----
     def _bus_task(self, task: PythonTask) -> int:
         """Poll ZMQ sockets to keep sensor/image caches current."""
         self.bus_sensors.poll(100)
         self.bus_images.poll(100)
+        self._update_command_latency_tracking()
         payload = self.bus_sensors.get(TOPIC_PATH_QUALITY)
         if isinstance(payload, dict) and payload != self._last_path_quality:
             self._last_path_quality = payload
@@ -508,6 +625,7 @@ class SpacebotLinkApp(ShowBase):
         """Assemble a status snapshot for the overlay."""
         avatar_pose = self.renderer.get_avatar_pose()
         avatar_ros = panda_pose_to_ros_tuple(avatar_pose)
+        response_delay_fill = self._avatar_delay_fill_progress(avatar_pose)
         robot_ros = self.nav.state.last_ros_pose
         pos_err = None
         if avatar_ros is not None and robot_ros is not None:
@@ -528,6 +646,10 @@ class SpacebotLinkApp(ShowBase):
             "waypoint_count": len(self.nav.state.follow_path_points),
             "follow_tip": follow_tip,
             "path_pose_count": len(self._last_path_poses),
+            "response_delay_fill": response_delay_fill,
+            "last_cmd_latency_s": self._last_cmd_latency_s,
+            "last_cmd_latency_label": self._last_cmd_latency_label,
+            "last_cmd_pending_age_s": self._last_pending_command_age_s(),
             "path_quality": self._last_path_quality,
             "path_goodness": (
                 self._extract_path_goodness(self._last_path_quality)

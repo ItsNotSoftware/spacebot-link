@@ -475,8 +475,8 @@ class UI:
         imgui.end()
 
         # Top-right control window
-        ctrl_w = 590.0
-        ctrl_h = 360.0
+        ctrl_w = 540.0
+        ctrl_h = 450.0
         ctrl_x = max(pad, scr_w - ctrl_w - pad)
         ctrl_y = pad
         imgui.set_next_window_pos((ctrl_x, ctrl_y), imgui.Cond_.always)
@@ -485,12 +485,12 @@ class UI:
             "Dashboard",
             flags=imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_resize,
         )
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, (18.0, 14.0))
-        imgui.push_style_var(imgui.StyleVar_.frame_padding, (18.0, 16.0))
+        imgui.push_style_var(imgui.StyleVar_.item_spacing, (14.0, 10.0))
+        imgui.push_style_var(imgui.StyleVar_.frame_padding, (16.0, 14.0))
 
         avail = imgui.get_content_region_avail().x
         half = (avail - imgui.get_style().item_spacing.x) * 0.5
-        btn_h = 84
+        btn_h = 76
 
         def _text_bold(color, text: str) -> None:
             """Draw text with a simple double-pass to mimic a bolder weight."""
@@ -548,20 +548,14 @@ class UI:
         f_base, f_hover, f_active = _mode_colors(is_follow)
         g_base, g_hover, g_active = _mode_colors(not is_follow)
 
+        # imgui.text_disabled("Navigation Mode")
         if _button("FOLLOW", (half, btn_h), f_base, f_hover, f_active):
             status.get("activate_follow", lambda: None)()
         imgui.same_line()
         if _button("GOAL", (half, btn_h), g_base, g_hover, g_active):
             status.get("activate_goal", lambda: None)()
-
-        quality_badge = _quality_badge(status.get("path_goodness"))
-        if quality_badge is not None:
-            q, quality_label, quality_color = quality_badge
-            _text_bold(quality_color, f"PATH {quality_label.upper()} ({q:.2f})")
-            _draw_quality_bar(q, quality_color, width=avail)
-        imgui.separator()
-
         btn_w = avail
+        imgui.spacing()
         if _button(
             "ABORT",
             (btn_w, btn_h),
@@ -570,6 +564,32 @@ class UI:
             (0.60, 0.18, 0.18, 1.0),
         ):
             self.trigger_abort()
+
+        quality_badge = _quality_badge(status.get("path_goodness"))
+        if quality_badge is not None:
+            q, quality_label, quality_color = quality_badge
+            imgui.spacing()
+            # imgui.text_disabled("Path Quality")
+            _text_bold(quality_color, f"PATH {quality_label.upper()} ({q:.2f})")
+            _draw_quality_bar(q, quality_color, width=avail)
+        bar_progress = 0.0
+        try:
+            bar_progress = max(
+                0.0, min(1.0, float(status.get("response_delay_fill", 0.0)))
+            )
+        except Exception:
+            bar_progress = 0.0
+        if bar_progress < 0.999:
+            imgui.spacing()
+            imgui.text_disabled("Robot Response Delay (~3s)")
+            imgui.push_style_color(imgui.Col_.frame_bg, (0.10, 0.14, 0.18, 1.0))
+            imgui.push_style_color(imgui.Col_.plot_histogram, (0.20, 0.72, 0.95, 1.0))
+            imgui.push_style_color(
+                imgui.Col_.plot_histogram_hovered, (0.30, 0.80, 1.0, 1.0)
+            )
+            imgui.progress_bar(bar_progress, (avail, 12.0), "")
+            imgui.pop_style_color(3)
+        imgui.separator()
 
         imgui.pop_style_var(2)
         imgui.end()
