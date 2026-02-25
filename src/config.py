@@ -105,6 +105,7 @@ ORIENT_PREVIEW_EXTRA_YAW_DEG = 0.0
 # UI font (ImGui). If the file is missing, the default ImGui font is used.
 UI_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 UI_FONT_SIZE_PX = 24.0
+UI_RESPONSE_DELAY_FILL_S = 2.5
 
 # Avatar offsets (camera center relative to robot body; aligned to SDF link pose)
 CAMERA_FORWARD_OFFSET_M = 0.07

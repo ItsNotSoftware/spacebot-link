@@ -223,7 +223,19 @@ class Renderer:
         dr.setSort(20)
         dr.setClearDepthActive(True)
         dr.setClearColorActive(True)
-        dr.setClearColor(Vec4(*ORIENT_PREVIEW_BG))
+        try:
+            bg_r, bg_g, bg_b, bg_a = ORIENT_PREVIEW_BG
+            # Light grey background for strong contrast and a cleaner widget feel.
+            dr.setClearColor(
+                Vec4(
+                    max(0.0, min(1.0, 0.86 + bg_r * 0.04)),
+                    max(0.0, min(1.0, 0.88 + bg_g * 0.04)),
+                    max(0.0, min(1.0, 0.90 + bg_b * 0.03)),
+                    1.0,
+                )
+            )
+        except Exception:
+            dr.setClearColor(Vec4(*ORIENT_PREVIEW_BG))
         self._orient_region = dr
 
         scene = NodePath("orientation_scene")
@@ -239,14 +251,24 @@ class Renderer:
         self._orient_cam = cam_np
 
         amb = AmbientLight("orientation_ambient")
-        amb.setColor(Vec4(0.55, 0.55, 0.55, 1.0))
+        amb.setColor(Vec4(0.42, 0.45, 0.50, 1.0))
         amb_np = scene.attachNewNode(amb)
         scene.setLight(amb_np)
-        sun = DirectionalLight("orientation_sun")
-        sun.setColor(Vec4(0.8, 0.8, 0.8, 1.0))
-        sun_np = scene.attachNewNode(sun)
-        sun_np.setHpr(45, -60, 0)
-        scene.setLight(sun_np)
+        key = DirectionalLight("orientation_key")
+        key.setColor(Vec4(1.05, 1.02, 0.95, 1.0))
+        key_np = scene.attachNewNode(key)
+        key_np.setHpr(38, -55, 0)
+        scene.setLight(key_np)
+        fill = DirectionalLight("orientation_fill")
+        fill.setColor(Vec4(0.34, 0.44, 0.56, 1.0))
+        fill_np = scene.attachNewNode(fill)
+        fill_np.setHpr(-130, -18, 0)
+        scene.setLight(fill_np)
+        rim = DirectionalLight("orientation_rim")
+        rim.setColor(Vec4(0.26, 0.36, 0.48, 1.0))
+        rim_np = scene.attachNewNode(rim)
+        rim_np.setHpr(180, 18, 0)
+        scene.setLight(rim_np)
 
         try:
             proto_model = self.base.loader.loadModel(str(model_path))

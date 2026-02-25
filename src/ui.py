@@ -11,6 +11,9 @@ from panda3d.core import PerspectiveLens
 from direct.showbase.ShowBase import ShowBase
 
 from config import (
+    ORIENT_PREVIEW_CROP_TOP,
+    ORIENT_PREVIEW_ENABLED,
+    ORIENT_PREVIEW_REGION,
     PATH_QUALITY_LABEL_CRITICAL,
     PATH_QUALITY_LABEL_EXCELLENT,
     PATH_QUALITY_LABEL_GOOD,
@@ -132,6 +135,103 @@ class UI:
         io = imgui.get_io()
         scr_w = io.display_size.x or 1920.0
         scr_h = io.display_size.y or 1080.0
+
+        def _draw_attitude_preview_frame() -> None:
+            """Draw a subtle framed widget around the Panda3D attitude preview region."""
+            if not ORIENT_PREVIEW_ENABLED:
+                return
+            try:
+                x0, x1, y0, y1 = ORIENT_PREVIEW_REGION
+            except Exception:
+                return
+            if x1 <= x0 or y1 <= y0:
+                return
+
+            # Match renderer crop logic so the frame aligns with the display region.
+            crop = max(0.0, float(ORIENT_PREVIEW_CROP_TOP))
+            if crop > 1e-6:
+                base_height = y1 - y0
+                base_width = x1 - x0
+                if base_height > 1e-6:
+                    new_y1 = y1 - crop
+                    new_height = new_y1 - y0
+                    if new_height > 1e-6:
+                        aspect = base_width / base_height
+                        new_width = aspect * new_height
+                        mid_x = 0.5 * (x0 + x1)
+                        x0 = mid_x - 0.5 * new_width
+                        x1 = mid_x + 0.5 * new_width
+                        y1 = new_y1
+                        x0 = max(0.0, x0)
+                        x1 = min(1.0, x1)
+
+            # Normalize/clamp because region intentionally may overscan screen edges.
+            x0 = max(0.0, min(1.0, float(x0)))
+            x1 = max(0.0, min(1.0, float(x1)))
+            y0 = max(0.0, min(1.0, float(y0)))
+            y1 = max(0.0, min(1.0, float(y1)))
+            if x1 <= x0 or y1 <= y0:
+                return
+
+            px0 = x0 * scr_w
+            px1 = x1 * scr_w
+            py0 = (1.0 - y1) * scr_h
+            py1 = (1.0 - y0) * scr_h
+            if px1 - px0 < 20.0 or py1 - py0 < 20.0:
+                return
+
+            draw = imgui.get_foreground_draw_list()
+            if draw is None:
+                return
+
+            outer_pad = 8.0
+            title_h = 38.0
+            rounding = 10.0
+            fx0 = px0 - outer_pad
+            fx1 = px1 + outer_pad
+            fy0 = py0 - title_h - 14.0
+            fy1 = py1 + outer_pad
+
+            shadow_col = imgui.get_color_u32((0.0, 0.0, 0.0, 0.34))
+            panel_col = imgui.get_color_u32((0.06, 0.08, 0.11, 0.28))
+            border_col = imgui.get_color_u32((0.40, 0.78, 0.98, 0.75))
+            inner_border_col = imgui.get_color_u32((0.95, 0.98, 1.0, 0.20))
+            title_bg_col = imgui.get_color_u32((0.10, 0.16, 0.22, 0.92))
+            title_text_col = imgui.get_color_u32((0.88, 0.96, 1.0, 1.0))
+
+            draw.add_rect_filled(
+                (fx0 + 3.0, fy0 + 4.0),
+                (fx1 + 3.0, fy1 + 4.0),
+                shadow_col,
+                rounding + 1.0,
+            )
+            draw.add_rect_filled((fx0, fy0), (fx1, fy1), panel_col, rounding)
+            draw.add_rect((fx0, fy0), (fx1, fy1), border_col, rounding, 0, 2.0)
+            draw.add_rect(
+                (px0 - 2.0, py0 - 2.0),
+                (px1 + 2.0, py1 + 2.0),
+                inner_border_col,
+                8.0,
+                0,
+                1.0,
+            )
+
+            label = "ORIENTATION PREVIEW"
+            text_sz = imgui.calc_text_size(label)
+            chip_w = max(154.0, text_sz.x + 24.0)
+            chip_x0 = fx0 + 10.0
+            chip_y0 = fy0 + 4.0
+            chip_x1 = chip_x0 + chip_w
+            chip_y1 = chip_y0 + title_h
+            draw.add_rect_filled(
+                (chip_x0, chip_y0), (chip_x1, chip_y1), title_bg_col, 7.0
+            )
+            draw.add_rect(
+                (chip_x0, chip_y0), (chip_x1, chip_y1), border_col, 7.0, 0, 1.0
+            )
+            draw.add_text((chip_x0 + 10.0, chip_y0 + 7.0), title_text_col, label)
+
+        _draw_attitude_preview_frame()
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
         imgui.set_next_window_size((1000, 620), imgui.Cond_.once)
@@ -581,7 +681,11 @@ class UI:
             bar_progress = 0.0
         if bar_progress < 0.999:
             imgui.spacing()
-            imgui.text_disabled("Robot Response Delay (~3s)")
+            try:
+                delay_fill_s = max(0.1, float(status.get("response_delay_fill_s", 2.5)))
+            except Exception:
+                delay_fill_s = 2.5
+            imgui.text_disabled(f"Robot Response Delay (~{delay_fill_s:.1f}s)")
             imgui.push_style_color(imgui.Col_.frame_bg, (0.10, 0.14, 0.18, 1.0))
             imgui.push_style_color(imgui.Col_.plot_histogram, (0.20, 0.72, 0.95, 1.0))
             imgui.push_style_color(

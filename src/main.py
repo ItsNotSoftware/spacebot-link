@@ -48,6 +48,7 @@ from config import (
     GAMEPAD_REMOTE_AUTOSTART,
     GAMEPAD_REMOTE_ENDPOINT,
     GAMEPAD_REMOTE_TOPIC,
+    UI_RESPONSE_DELAY_FILL_S,
 )
 from utils import (
     extract_ros_pose,
@@ -257,7 +258,7 @@ class SpacebotLinkApp(ShowBase):
         return max(0.0, time.monotonic() - newest)
 
     def _avatar_delay_fill_progress(self, avatar_pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]) -> float:
-        """Return [0,1] progress that resets on avatar movement and fills over 3 seconds."""
+        """Return [0,1] progress that resets on avatar movement and fills over configured duration."""
         now_s = time.monotonic()
         prev = self._avatar_delay_bar_pose
         moved = False
@@ -279,7 +280,8 @@ class SpacebotLinkApp(ShowBase):
             self._avatar_delay_bar_pose = avatar_pose
             return 0.0
         elapsed = max(0.0, now_s - self._avatar_delay_bar_reset_s)
-        return max(0.0, min(1.0, elapsed / 3.0))
+        duration_s = max(0.1, float(UI_RESPONSE_DELAY_FILL_S))
+        return max(0.0, min(1.0, elapsed / duration_s))
 
     # ---- tasks ----
     def _bus_task(self, task: PythonTask) -> int:
@@ -647,6 +649,7 @@ class SpacebotLinkApp(ShowBase):
             "follow_tip": follow_tip,
             "path_pose_count": len(self._last_path_poses),
             "response_delay_fill": response_delay_fill,
+            "response_delay_fill_s": float(UI_RESPONSE_DELAY_FILL_S),
             "last_cmd_latency_s": self._last_cmd_latency_s,
             "last_cmd_latency_label": self._last_cmd_latency_label,
             "last_cmd_pending_age_s": self._last_pending_command_age_s(),
