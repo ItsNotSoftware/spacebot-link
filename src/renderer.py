@@ -2,73 +2,82 @@
 
 from __future__ import annotations
 
-from math import pi, sin, cos
+from math import cos, pi, sin
 from pathlib import Path
-from typing import Optional, Tuple, List, Any
+from typing import Any, List, Optional, Tuple
 
+from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     AmbientLight,
     Camera,
     CardMaker,
     DirectionalLight,
+    Geom,
+    GeomNode,
+    GeomTriangles,
+    GeomVertexData,
+    GeomVertexFormat,
+    GeomVertexWriter,
     LineSegs,
     NodePath,
     PerspectiveLens,
     Quat,
     Texture,
     TextureStage,
+    TransparencyAttrib,
     Vec3,
     Vec4,
-    TransparencyAttrib,
 )
-from direct.showbase.ShowBase import ShowBase
 
 from avatar import Avatar
 from config import (
+    AVATAR_CAMERA_OFFSET,
+    CAMERA_CX,
+    CAMERA_CY,
+    CAMERA_FX,
+    CAMERA_FY,
+    CAMERA_HEIGHT_PX,
     CAMERA_UP_OFFSET_M,
-    PATH_GHOST_MODEL,
+    CAMERA_WIDTH_PX,
+    FLOOR_LINE_COLOR,
+    FLOOR_LINE_THICKNESS,
+    FLOOR_SHADOW_BASE_RADIUS,
+    FLOOR_SHADOW_COLOR,
+    FLOOR_SHADOW_FAR_DIST,
+    FLOOR_SHADOW_INNER_RATIO,
+    FLOOR_SHADOW_MAX_SCALE,
+    FLOOR_SHADOW_MIN_SCALE,
+    FLOOR_SHADOW_NEAR_DIST,
+    FLOOR_SHADOW_THICKNESS,
+    ORIENT_PREVIEW_AVATAR_COLOR,
+    ORIENT_PREVIEW_BG,
+    ORIENT_PREVIEW_CAMERA_DISTANCE,
+    ORIENT_PREVIEW_CAMERA_HEIGHT,
+    ORIENT_PREVIEW_CROP_TOP,
+    ORIENT_PREVIEW_ENABLED,
+    ORIENT_PREVIEW_EXTRA_YAW_DEG,
+    ORIENT_PREVIEW_MODEL,
+    ORIENT_PREVIEW_REGION,
+    ORIENT_PREVIEW_TARGET_SIZE,
     PATH_ANIM_INSTANCES,
     PATH_ANIM_LINE_ENABLED,
     PATH_ANIM_SPEED,
+    PATH_GHOST_END_MARGIN_M,
+    PATH_GHOST_FRACTION,
+    PATH_GHOST_MODEL,
+    PATH_GHOST_START_OFFSET_M,
     PATH_LINE_COLOR,
+    PATH_LINE_RIBBON_ALPHA,
+    PATH_LINE_RIBBON_LIFT_M,
+    PATH_LINE_RIBBON_WIDTH_M,
     PATH_LINE_SAMPLE_SPACING_M,
     PATH_LINE_THICKNESS,
     PATH_MARKER_SPACING_M,
     PATH_MODE_DEFAULT,
-    PATH_GHOST_START_OFFSET_M,
-    PATH_GHOST_END_MARGIN_M,
-    PATH_GHOST_FRACTION,
-    PATH_PLANE_SIZE,
-    PATH_PLANE_OUTLINE_COLOR,
     PATH_PLANE_FILL_ALPHA,
+    PATH_PLANE_OUTLINE_COLOR,
+    PATH_PLANE_SIZE,
     PATH_PLANE_THICKNESS,
-    AVATAR_CAMERA_OFFSET,
-    FLOOR_SHADOW_BASE_RADIUS,
-    FLOOR_SHADOW_INNER_RATIO,
-    FLOOR_SHADOW_MIN_SCALE,
-    FLOOR_SHADOW_MAX_SCALE,
-    FLOOR_SHADOW_NEAR_DIST,
-    FLOOR_SHADOW_FAR_DIST,
-    FLOOR_SHADOW_COLOR,
-    FLOOR_SHADOW_THICKNESS,
-    FLOOR_LINE_COLOR,
-    FLOOR_LINE_THICKNESS,
-    CAMERA_WIDTH_PX,
-    CAMERA_HEIGHT_PX,
-    CAMERA_FX,
-    CAMERA_FY,
-    CAMERA_CX,
-    CAMERA_CY,
-    ORIENT_PREVIEW_ENABLED,
-    ORIENT_PREVIEW_REGION,
-    ORIENT_PREVIEW_BG,
-    ORIENT_PREVIEW_CROP_TOP,
-    ORIENT_PREVIEW_MODEL,
-    ORIENT_PREVIEW_TARGET_SIZE,
-    ORIENT_PREVIEW_CAMERA_DISTANCE,
-    ORIENT_PREVIEW_CAMERA_HEIGHT,
-    ORIENT_PREVIEW_AVATAR_COLOR,
-    ORIENT_PREVIEW_EXTRA_YAW_DEG,
 )
 from utils import (
     apply_opencv_intrinsics_to_lens,
@@ -495,7 +504,7 @@ class Renderer:
         poses: List[PoseTuple],
         color: Optional[Tuple[float, float, float, float]] = None,
     ) -> None:
-        """Draw a layered line strip to improve readability and depth cues."""
+        """Draw a thin ribbon plane plus center line for clearer 3D path preview."""
         line_poses = self._line_poses_by_distance(poses)
         if len(line_poses) < 2:
             return
@@ -504,23 +513,6 @@ class Renderer:
         segment_risks = self._segment_risks_for_poses(line_poses)
         if len(segment_risks) < seg_count:
             segment_risks.extend([0.0] * (seg_count - len(segment_risks)))
-
-        def _make_layer(name: str, thickness: float, color_fn) -> Optional[NodePath]:
-            segs = LineSegs(name)
-            segs.setThickness(max(1.0, thickness))
-            for idx in range(seg_count):
-                (x1, y1, z1), _ = line_poses[idx]
-                (x2, y2, z2), _ = line_poses[idx + 1]
-                segs.setColor(*color_fn(idx, seg_count))
-                segs.moveTo(x1, y1, z1)
-                segs.drawTo(x2, y2, z2)
-            node = segs.create()
-            if node is None:
-                return None
-            np_line = self.base.render.attachNewNode(node)
-            np_line.setDepthWrite(False)
-            np_line.setDepthTest(False)
-            return np_line
 
         def _risk_to_color(risk: float) -> Tuple[float, float, float, float]:
             risk = max(0.0, min(1.0, float(risk)))
@@ -536,33 +528,71 @@ class Renderer:
                 c0, c1 = yellow, red
             return tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))  # type: ignore[return-value]
 
-        container = self.base.render.attachNewNode("path_line_layers")
+        container = self.base.render.attachNewNode("path_line_ribbon")
         r, g, b, a = base_color
-        outer = _make_layer(
-            "path_line_outer",
-            PATH_LINE_THICKNESS + 2.5,
-            lambda _idx, _n: (0.0, 0.0, 0.0, min(0.55, a)),
-        )
-        if any(v > 1e-6 for v in segment_risks):
-            def _inner_color(idx: int, nseg: int) -> Tuple[float, float, float, float]:
-                progress = (idx + 0.5) / max(1, nseg)
-                rr, gg, bb, _ = _risk_to_color(segment_risks[idx])
-                # Add subtle progression-based fade to improve depth/readability.
-                alpha = max(0.35, a * (0.70 + 0.30 * (1.0 - 0.35 * progress)))
-                brighten = 1.0 - 0.12 * progress
-                return (rr * brighten, gg * brighten, bb * brighten, alpha)
-        else:
-            def _inner_color(idx: int, nseg: int) -> Tuple[float, float, float, float]:
-                progress = (idx + 0.5) / max(1, nseg)
-                alpha = max(0.35, a * (0.70 + 0.30 * (1.0 - 0.35 * progress)))
-                brighten = 1.0 - 0.12 * progress
-                return (r * brighten, g * brighten, b * brighten, alpha)
-        inner = _make_layer("path_line_inner", PATH_LINE_THICKNESS, _inner_color)
-        for idx, child in enumerate((outer, inner)):
-            if child is None:
+
+        fmt = GeomVertexFormat.getV3c4()
+        vdata = GeomVertexData("path_ribbon", fmt, Geom.UHStatic)
+        vtx = GeomVertexWriter(vdata, "vertex")
+        col = GeomVertexWriter(vdata, "color")
+        prim = GeomTriangles(Geom.UHStatic)
+
+        base_width = max(0.03, float(PATH_LINE_RIBBON_WIDTH_M))
+        z_lift = float(PATH_LINE_RIBBON_LIFT_M)
+        any_risk = any(v > 1e-6 for v in segment_risks)
+
+        for idx in range(seg_count):
+            (x1, y1, z1), _ = line_poses[idx]
+            (x2, y2, z2), _ = line_poses[idx + 1]
+            p1 = Vec3(x1, y1, z1 + z_lift)
+            p2 = Vec3(x2, y2, z2 + z_lift)
+            tangent = p2 - p1
+            seg_len = tangent.length()
+            if seg_len <= 1e-6:
                 continue
-            child.reparentTo(container)
-            child.setBin("fixed", 4 + idx)
+            tangent /= seg_len
+            side = tangent.cross(Vec3(0.0, 0.0, 1.0))
+            if side.lengthSquared() <= 1e-8:
+                side = tangent.cross(Vec3(0.0, 1.0, 0.0))
+            if side.lengthSquared() <= 1e-8:
+                continue
+            side.normalize()
+
+            progress = (idx + 0.5) / max(1, seg_count)
+            width = base_width * (1.0 - 0.30 * progress)
+            half_side = side * (0.5 * width)
+
+            if any_risk:
+                rr, gg, bb, _ = _risk_to_color(segment_risks[idx])
+            else:
+                rr, gg, bb = r, g, b
+            brightness = 1.0 - 0.10 * progress
+            alpha = max(0.24, min(1.0, float(PATH_LINE_RIBBON_ALPHA) * a))
+            rgba = (rr * brightness, gg * brightness, bb * brightness, alpha)
+
+            i0 = vtx.getWriteRow()
+            p1l = p1 - half_side
+            p1r = p1 + half_side
+            p2r = p2 + half_side
+            p2l = p2 - half_side
+            for p in (p1l, p1r, p2r, p2l):
+                vtx.addData3f(p)
+                col.addData4f(*rgba)
+            prim.addVertices(i0, i0 + 1, i0 + 2)
+            prim.addVertices(i0, i0 + 2, i0 + 3)
+
+        if vdata.getNumRows() > 0:
+            geom = Geom(vdata)
+            geom.addPrimitive(prim)
+            node = GeomNode("path_ribbon_geom")
+            node.addGeom(geom)
+            ribbon_np = container.attachNewNode(node)
+            ribbon_np.setTransparency(TransparencyAttrib.MAlpha)
+            ribbon_np.setTwoSided(True)
+            ribbon_np.setDepthWrite(False)
+            ribbon_np.setDepthTest(False)
+            ribbon_np.setBin("fixed", 4)
+
         self._path_line = container
 
     def _path_line_color(self) -> Tuple[float, float, float, float]:
@@ -664,7 +694,9 @@ class Renderer:
         """Resample path poses at fixed arc-length spacing for consistent preview density."""
         if len(poses) <= 2:
             return list(poses)
-        spacing = max(0.05, float(self.marker_spacing_m if spacing_m is None else spacing_m))
+        spacing = max(
+            0.05, float(self.marker_spacing_m if spacing_m is None else spacing_m)
+        )
 
         cumulative = [0.0]
         total = 0.0
@@ -1155,6 +1187,12 @@ class Renderer:
                 self._path_markers.append(plane)
             return
 
+        if self.path_mode == "poses_line":
+            self._clear_path_vis()
+            if poses:
+                self._draw_path_line(poses)
+            return
+
         self._clear_path_vis()
         if not poses:
             return
@@ -1189,9 +1227,6 @@ class Renderer:
             ghost.setColorScale(1.0, 1.0, 1.0, alpha)
             ghost.setScale(scale)
             self._path_markers.append(ghost)
-
-        if self.path_mode == "poses_line":
-            self._draw_path_line(poses)
 
     def sync_avatar_to_robot(self, robot_pose: PoseTuple) -> PoseTuple:
         """Align the avatar with the provided robot pose."""
