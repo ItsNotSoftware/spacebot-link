@@ -23,16 +23,24 @@ except Exception as exc:  # pragma: no cover - runtime guard
     ) from exc
 
 from config import (
+    SPACEMOUSE_AXIS_SCALE,
     SPACEMOUSE_CROSS_DRIFT_MAX,
     SPACEMOUSE_INTENT_MIN,
     SPACEMOUSE_INVERT_PITCH,
     SPACEMOUSE_INVERT_YAW,
+    SPACEMOUSE_MIXED_AXIS_CLIP_MIN,
+    SPACEMOUSE_MIXED_AXIS_CLIP_RATIO,
     SPACEMOUSE_REMOTE_ENDPOINT,
     SPACEMOUSE_REMOTE_TOPIC,
     SPACEMOUSE_RESPONSE_CURVE,
+    SPACEMOUSE_ROTATION_AXIS_CLIP_MIN,
+    SPACEMOUSE_ROTATION_AXIS_CLIP_RATIO,
     SPACEMOUSE_ROTATION_DEADZONE,
     SPACEMOUSE_SMOOTHING,
+    SPACEMOUSE_TRANSLATION_AXIS_CLIP_MIN,
+    SPACEMOUSE_TRANSLATION_AXIS_CLIP_RATIO,
     SPACEMOUSE_TRANSLATION_DEADZONE,
+    SPACEMOUSE_VERTICAL_SCALE,
 )
 
 AXIS_INDEX = {
@@ -87,6 +95,30 @@ def _apply_curve(value: float, curve: float) -> float:
     return (abs(value) ** c) * (1.0 if value >= 0.0 else -1.0)
 
 
+def _clip_translation_axes(
+    x: float, y: float, z: float, clip_min: float, clip_ratio: float
+) -> tuple[float, float, float]:
+    values = [x, y, z]
+    abs_values = [abs(v) for v in values]
+    dominant = max(abs_values)
+    if dominant < float(clip_min):
+        return x, y, z
+    ratio = float(clip_ratio)
+    if ratio <= 0.0:
+        return x, y, z
+    out = values[:]
+    for i, av in enumerate(abs_values):
+        if av < dominant * ratio:
+            out[i] = 0.0
+    return float(out[0]), float(out[1]), float(out[2])
+
+
+def _clip_rotation_axes(
+    roll: float, pitch: float, yaw: float, clip_min: float, clip_ratio: float
+) -> tuple[float, float, float]:
+    return _clip_translation_axes(roll, pitch, yaw, clip_min, clip_ratio)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Publish SpaceMouse state over ZMQ.")
     parser.add_argument(
@@ -114,8 +146,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--axis-scale",
         type=float,
-        default=float(os.getenv("SPACEMOUSE_AXIS_SCALE", "1.0")),
+        default=float(os.getenv("SPACEMOUSE_AXIS_SCALE", str(SPACEMOUSE_AXIS_SCALE))),
         help="Gain applied to raw axes before clamping to [-1, 1].",
+    )
+    parser.add_argument(
+        "--vertical-scale",
+        type=float,
+        default=float(
+            os.getenv("SPACEMOUSE_VERTICAL_SCALE", str(SPACEMOUSE_VERTICAL_SCALE))
+        ),
+        help="Additional gain applied only to vertical (Z) motion.",
     )
     parser.add_argument(
         "--yaw-threshold",
@@ -190,6 +230,72 @@ def _parse_args() -> argparse.Namespace:
             os.getenv("SPACEMOUSE_CROSS_DRIFT_MAX", str(SPACEMOUSE_CROSS_DRIFT_MAX))
         ),
         help="Allowed tiny drift in the non-dominant group before suppression.",
+    )
+    parser.add_argument(
+        "--translation-axis-clip-min",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_TRANSLATION_AXIS_CLIP_MIN",
+                str(SPACEMOUSE_TRANSLATION_AXIS_CLIP_MIN),
+            )
+        ),
+        help="Minimum translation magnitude before axis clipping is applied.",
+    )
+    parser.add_argument(
+        "--translation-axis-clip-ratio",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_TRANSLATION_AXIS_CLIP_RATIO",
+                str(SPACEMOUSE_TRANSLATION_AXIS_CLIP_RATIO),
+            )
+        ),
+        help="Suppress weaker translation axes below dominant*ratio.",
+    )
+    parser.add_argument(
+        "--rotation-axis-clip-min",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_ROTATION_AXIS_CLIP_MIN",
+                str(SPACEMOUSE_ROTATION_AXIS_CLIP_MIN),
+            )
+        ),
+        help="Minimum rotation magnitude before axis clipping is applied.",
+    )
+    parser.add_argument(
+        "--rotation-axis-clip-ratio",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_ROTATION_AXIS_CLIP_RATIO",
+                str(SPACEMOUSE_ROTATION_AXIS_CLIP_RATIO),
+            )
+        ),
+        help="Suppress weaker rotation axes below dominant*ratio.",
+    )
+    parser.add_argument(
+        "--mixed-axis-clip-min",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_MIXED_AXIS_CLIP_MIN",
+                str(SPACEMOUSE_MIXED_AXIS_CLIP_MIN),
+            )
+        ),
+        help="Minimum group magnitude before mixed translation/rotation clipping applies.",
+    )
+    parser.add_argument(
+        "--mixed-axis-clip-ratio",
+        type=float,
+        default=float(
+            os.getenv(
+                "SPACEMOUSE_MIXED_AXIS_CLIP_RATIO",
+                str(SPACEMOUSE_MIXED_AXIS_CLIP_RATIO),
+            )
+        ),
+        help="Suppress weaker translation/rotation group below stronger*ratio.",
     )
     return parser.parse_args()
 
@@ -336,7 +442,7 @@ def main() -> int:
 
         tx = _clamp(tx * gain, -1.0, 1.0)
         ty = _clamp(ty * gain, -1.0, 1.0)
-        tz = _clamp(tz * gain, -1.0, 1.0)
+        tz = _clamp(tz * gain * float(args.vertical_scale), -1.0, 1.0)
         rr = _clamp(rr * gain, -1.0, 1.0)
         rp = _clamp(rp * gain, -1.0, 1.0)
         ry = _clamp(ry * gain, -1.0, 1.0)
@@ -387,6 +493,30 @@ def main() -> int:
         rr = filtered["rr"]
         rp = filtered["rp"]
         ry = filtered["ry"]
+
+        tx, ty, tz = _clip_translation_axes(
+            tx,
+            ty,
+            tz,
+            args.translation_axis_clip_min,
+            args.translation_axis_clip_ratio,
+        )
+        rr, rp, ry = _clip_rotation_axes(
+            rr,
+            rp,
+            ry,
+            args.rotation_axis_clip_min,
+            args.rotation_axis_clip_ratio,
+        )
+
+        t_max = max(abs(tx), abs(ty), abs(tz))
+        r_max = max(abs(rr), abs(rp), abs(ry))
+        mixed_min = float(args.mixed_axis_clip_min)
+        mixed_ratio = float(args.mixed_axis_clip_ratio)
+        if t_max >= mixed_min and r_max <= t_max * mixed_ratio:
+            rr = rp = ry = 0.0
+        elif r_max >= mixed_min and t_max <= r_max * mixed_ratio:
+            tx = ty = tz = 0.0
 
         # Gamepad-compatible mapping used by InputController robot mode:
         # lin_x = -left_y, lin_y = left_x, lin_z = right_trigger - left_trigger
