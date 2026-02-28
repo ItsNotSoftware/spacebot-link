@@ -1,25 +1,41 @@
 from __future__ import annotations
 
-from collections import deque
 import json
 import math
 import os
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Optional, Sequence, List, Tuple
-
-from panda3d.core import loadPrcFileData, PythonTask
-from direct.showbase.ShowBase import ShowBase
-from direct.task import Task
+from collections import deque
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import p3dimgui
+import zmq
+from direct.showbase.ShowBase import ShowBase
+from direct.task import Task
 from imgui_bundle import imgui
+from panda3d.core import PythonTask, loadPrcFileData
 
 from config import (
+    AVATAR_AUTO_RESET_DELAY_S,
+    AVATAR_AUTO_RESET_DISTANCE,
+    AVATAR_COLOR_IN_OBSTACLE,
+    AVATAR_COLOR_OCCLUDED,
+    AVATAR_COLOR_VISIBLE,
+    AVATAR_HIDE_DISTANCE,
+    FLOOR_PROJECTION_ENABLED,
     FRAMEBUFFER_SRGB_CFG,
-    TRANSPARENCY_SORT_CFG,
-    WINDOW_TITLE,
+    GAMEPAD_REMOTE_AUTOSTART,
+    GAMEPAD_REMOTE_ENDPOINT,
+    GAMEPAD_REMOTE_TOPIC,
+    OCTOMAP_QUERY_PERIOD_S,
+    OCTOMAP_SERVER_BIN,
+    OCTOMAP_SERVER_ENDPOINT,
+    OCTOMAP_SERVER_MAP,
+    OCTOMAP_SERVER_MAX_RANGE,
+    SPACEMOUSE_REMOTE_AUTOSTART,
+    SPACEMOUSE_REMOTE_ENDPOINT,
+    SPACEMOUSE_REMOTE_TOPIC,
     TOPIC_CMD_PATH,
     TOPIC_CMD_VEL,
     TOPIC_GOAL,
@@ -27,45 +43,31 @@ from config import (
     TOPIC_PATH,
     TOPIC_PATH_EXEC_SUMMARY_FORCE,
     TOPIC_PATH_EXEC_SUMMARY_VEL,
-    TOPIC_POSE,
     TOPIC_PATH_QUALITY,
+    TOPIC_POSE,
+    TRANSPARENCY_SORT_CFG,
+    UI_RESPONSE_DELAY_FILL_S,
+    WINDOW_TITLE,
     default_cmd_endpoint,
     default_gltf_model,
     default_image_endpoint,
     default_sensor_endpoint,
-    OCTOMAP_SERVER_BIN,
-    OCTOMAP_SERVER_ENDPOINT,
-    OCTOMAP_SERVER_MAP,
-    OCTOMAP_SERVER_MAX_RANGE,
-    OCTOMAP_QUERY_PERIOD_S,
-    AVATAR_COLOR_VISIBLE,
-    AVATAR_COLOR_OCCLUDED,
-    AVATAR_COLOR_IN_OBSTACLE,
-    FLOOR_PROJECTION_ENABLED,
-    AVATAR_AUTO_RESET_DISTANCE,
-    AVATAR_AUTO_RESET_DELAY_S,
-    AVATAR_HIDE_DISTANCE,
-    GAMEPAD_REMOTE_AUTOSTART,
-    GAMEPAD_REMOTE_ENDPOINT,
-    GAMEPAD_REMOTE_TOPIC,
-    UI_RESPONSE_DELAY_FILL_S,
-)
-from utils import (
-    extract_ros_pose,
-    is_zero_cmd_vel,
-    panda_pose_to_ros_tuple,
-    panda_pose_to_ros,
-    parse_ros_path,
-    ros_position_to_panda_pos,
-    ros_pose_to_panda_pos_hpr,
-    ros_vector_to_panda,
 )
 from input_controller import InputController
 from navigation import Navigation
 from renderer import Renderer
 from teleop_bus import TeleopBusPub, TeleopBusSub
 from ui import UI
-import zmq
+from utils import (
+    extract_ros_pose,
+    is_zero_cmd_vel,
+    panda_pose_to_ros,
+    panda_pose_to_ros_tuple,
+    parse_ros_path,
+    ros_pose_to_panda_pos_hpr,
+    ros_position_to_panda_pos,
+    ros_vector_to_panda,
+)
 
 # ---- config before ShowBase ----
 loadPrcFileData("", f"window-title {WINDOW_TITLE}")
@@ -122,17 +124,21 @@ class SpacebotLinkApp(ShowBase):
         self._last_path_poses: List = []
         self._last_floor_height: Optional[str] = None
         self._floor_projection_enabled: bool = bool(FLOOR_PROJECTION_ENABLED)
+        self._interface_elements_enabled: bool = True
         self._last_path_quality: Optional[Dict[str, Any]] = None
         self._octomap_proc: Optional[subprocess.Popen] = None
         self._octomap_socket: Optional[zmq.Socket] = None
         self._gamepad_proc: Optional[subprocess.Popen] = None
+        self._spacemouse_proc: Optional[subprocess.Popen] = None
         self._cleaned_up: bool = False
         self._octomap_context = zmq.Context.instance()
         self._last_octomap: Optional[Dict[str, Any]] = None
         self._last_octomap_raw: Optional[str] = None
         self._last_avatar_state: Optional[Tuple[Optional[bool], Optional[bool]]] = None
         self._last_path_line_style_refresh_s: float = 0.0
-        self._avatar_delay_bar_pose: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
+        self._avatar_delay_bar_pose: Optional[
+            Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = None
         self._avatar_delay_bar_reset_s: float = time.monotonic()
         self._pending_cmd_sent_s: Dict[str, float] = {}
         self._last_cmd_latency_s: Optional[float] = None
@@ -170,6 +176,7 @@ class SpacebotLinkApp(ShowBase):
         self._start_octomap_process()
         self._init_octomap_socket()
         self._start_gamepad_remote_process()
+        self._start_spacemouse_remote_process()
         self.renderer.set_avatar_color(AVATAR_COLOR_VISIBLE)
 
     @staticmethod
@@ -246,7 +253,9 @@ class SpacebotLinkApp(ShowBase):
             self._ack_pending_cmds(("nav_goal", "nav_path"), "path exec")
 
         planner_path = self.bus_sensors.get(TOPIC_PATH)
-        if planner_path is not None and planner_path != getattr(self, "_last_path_data", None):
+        if planner_path is not None and planner_path != getattr(
+            self, "_last_path_data", None
+        ):
             # Planner path updates are often the earliest visible response to goal/path commands.
             self._ack_pending_cmds(("nav_goal", "nav_path"), "planner path")
 
@@ -257,7 +266,9 @@ class SpacebotLinkApp(ShowBase):
         newest = max(self._pending_cmd_sent_s.values())
         return max(0.0, time.monotonic() - newest)
 
-    def _avatar_delay_fill_progress(self, avatar_pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]) -> float:
+    def _avatar_delay_fill_progress(
+        self, avatar_pose: Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ) -> float:
         """Return [0,1] progress that resets on avatar movement and fills over configured duration."""
         now_s = time.monotonic()
         prev = self._avatar_delay_bar_pose
@@ -391,6 +402,34 @@ class SpacebotLinkApp(ShowBase):
         except Exception as ex:
             print(f"[gamepad] Failed to start remote process: {ex}")
 
+    def _start_spacemouse_remote_process(self) -> None:
+        if not (
+            SPACEMOUSE_REMOTE_AUTOSTART
+            or os.getenv("SPACEMOUSE_REMOTE_AUTOSTART") == "1"
+        ):
+            return
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script_path = os.path.abspath(
+            os.path.join(root_dir, "src", "spacemouse_daemon.py")
+        )
+        if not os.path.isfile(script_path):
+            print(f"[spacemouse] daemon not found: {script_path}")
+            return
+        if self._spacemouse_proc is not None and self._spacemouse_proc.poll() is None:
+            return
+        env = os.environ.copy()
+        env.setdefault("SPACEMOUSE_REMOTE", "1")
+        env.setdefault("SPACEMOUSE_REMOTE_ENDPOINT", SPACEMOUSE_REMOTE_ENDPOINT)
+        env.setdefault("SPACEMOUSE_REMOTE_TOPIC", SPACEMOUSE_REMOTE_TOPIC)
+        try:
+            self._spacemouse_proc = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=os.path.dirname(script_path),
+                env=env,
+            )
+        except Exception as ex:
+            print(f"[spacemouse] Failed to start remote process: {ex}")
+
     def _init_octomap_socket(self) -> None:
         sock = self._octomap_context.socket(zmq.REQ)
         sock.setsockopt(zmq.LINGER, 0)
@@ -503,7 +542,7 @@ class SpacebotLinkApp(ShowBase):
             return
 
         axis_panda = ros_vector_to_panda(axis_ros)
-        if self._floor_projection_enabled:
+        if self._floor_projection_enabled and self._interface_elements_enabled:
             (rx, ry, rz), _ = robot_pose_panda
             dx = avatar_pos_panda[0] - rx
             dy = avatar_pos_panda[1] - ry
@@ -549,6 +588,10 @@ class SpacebotLinkApp(ShowBase):
 
     def _orientation_preview_task(self, task: PythonTask) -> int:
         """Update the orientation preview models."""
+        if not self._interface_elements_enabled:
+            self.renderer.set_orientation_preview_visible(False)
+            return Task.cont
+        self.renderer.set_orientation_preview_visible(True)
         robot_ros_orientation = self.nav.state.last_ros_orientation
         avatar_pose = self.renderer.get_avatar_pose()
         avatar_hpr = avatar_pose[1] if avatar_pose else None
@@ -593,6 +636,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _path_task(self, task: PythonTask) -> int:
         """Render path markers from nav path or follow buffer."""
+        if not self._interface_elements_enabled:
+            self.renderer.clear_path_markers()
+            return Task.cont
         if self.ui.mode == "Follow Mode":
             self.renderer.render_path_markers(self.nav.state.follow_path_points)
             return Task.cont
@@ -668,6 +714,7 @@ class SpacebotLinkApp(ShowBase):
             "avatar_ros_pose": avatar_ros,
             "robot_ros_pose": robot_ros,
             "avatar_robot_error": pos_err,
+            "input_6dof": self.input.get_input_6dof(),
             "floor_height": self._last_floor_height,
             "octomap_json": (
                 self._last_octomap_raw[:2000] if self._last_octomap_raw else None
@@ -691,7 +738,8 @@ class SpacebotLinkApp(ShowBase):
                 else None
             ),
             "floor_projection_enabled": self._floor_projection_enabled,
-            "set_floor_projection_enabled": self._set_floor_projection_enabled,
+            "interface_elements_enabled": self._interface_elements_enabled,
+            "set_interface_elements_enabled": self._set_interface_elements_enabled,
             "set_nav_enabled": self._set_nav_enabled,
             "set_move_mode": self.input.set_move_mode,
             "activate_follow": self._activate_follow_mode,
@@ -719,6 +767,18 @@ class SpacebotLinkApp(ShowBase):
         self._floor_projection_enabled = bool(enabled)
         if not self._floor_projection_enabled:
             self.renderer.clear_floor_indicator()
+
+    def _set_interface_elements_enabled(self, enabled: bool) -> None:
+        """Toggle visibility of non-essential interface scene elements."""
+        self._interface_elements_enabled = bool(enabled)
+        if not self._interface_elements_enabled:
+            self.renderer.clear_floor_indicator()
+            self.renderer.clear_path_markers()
+            self.renderer.set_orientation_preview_visible(False)
+            self.renderer.set_avatar_visible(False)
+            return
+        self.renderer.set_orientation_preview_visible(True)
+        self._rerender_path()
 
     def _activate_goal_mode(self) -> None:
         """Switch to goal mode and seed last goal pose."""
@@ -821,6 +881,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _update_avatar_visibility(self, robot_pose: Tuple) -> None:
         """Hide avatar when it's very close to the robot pose."""
+        if not self._interface_elements_enabled:
+            self.renderer.set_avatar_visible(False)
+            return
         if self.input.is_robot_mode():
             return
         if robot_pose is None:
@@ -909,6 +972,10 @@ class SpacebotLinkApp(ShowBase):
         except Exception:
             pass
         try:
+            self.input.close()
+        except Exception:
+            pass
+        try:
             if self._octomap_socket is not None:
                 self._octomap_socket.close(0)
         except Exception:
@@ -923,6 +990,12 @@ class SpacebotLinkApp(ShowBase):
             if self._gamepad_proc is not None:
                 _stop_process(self._gamepad_proc, "gamepad")
                 self._gamepad_proc = None
+        except Exception:
+            pass
+        try:
+            if self._spacemouse_proc is not None:
+                _stop_process(self._spacemouse_proc, "spacemouse")
+                self._spacemouse_proc = None
         except Exception:
             pass
         self.renderer.clear_path_markers()

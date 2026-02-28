@@ -214,3 +214,47 @@ GAMEPAD_BUTTON_INDEX_TRIANGLE = 3
 GAMEPAD_BUTTON_INDEX_TOUCHPAD = 13
 GAMEPAD_BUTTON_INDEX_L3 = 10
 GAMEPAD_BUTTON_INDEX_R3 = 11
+
+# SpaceMouse control tuning (remote daemon input via pyspacemouse)
+SPACEMOUSE_ENABLED = True
+SPACEMOUSE_DEADZONE = 0.08
+SPACEMOUSE_CURVE_TRANSLATION = 1.8
+SPACEMOUSE_CURVE_ROTATION = 1.8
+SPACEMOUSE_SMOOTHING = 0.12
+SPACEMOUSE_TRANSLATION_SCALE = 1.0
+SPACEMOUSE_ROTATION_SCALE = 1.0
+
+# Remote SpaceMouse (external process -> ZMQ)
+SPACEMOUSE_REMOTE_ENABLED = True
+SPACEMOUSE_REMOTE_AUTOSTART = True
+SPACEMOUSE_REMOTE_ENDPOINT = "tcp://127.0.0.1:5581"
+SPACEMOUSE_REMOTE_TOPIC = "/spacemouse/state"
+SPACEMOUSE_REMOTE_TIMEOUT_S = 0.35
+
+# Clip small axis leakage when one axis is clearly dominant.
+# Example: ~95% forward + ~5% pitch => keep only forward.
+SPACEMOUSE_AXIS_CLIP_MIN = 0.45
+SPACEMOUSE_AXIS_CLIP_RATIO = 0.18
+# Cross-group clipping between translation and rotation.
+SPACEMOUSE_MIXED_CLIP_MIN = 0.70
+SPACEMOUSE_MIXED_CLIP_RATIO = 0.20
+
+# Axis names for SpaceMouse pose state.
+SPACEMOUSE_AXIS_X = ("x",)
+SPACEMOUSE_AXIS_Y = ("y",)
+SPACEMOUSE_AXIS_Z = ("z",)
+SPACEMOUSE_AXIS_ROLL = ("roll",)
+SPACEMOUSE_AXIS_PITCH = ("pitch",)
+SPACEMOUSE_AXIS_YAW = ("yaw",)
+
+# Optional sign flips to match preferred control directions.
+SPACEMOUSE_INVERT_Y = False
+SPACEMOUSE_INVERT_Z = False
+SPACEMOUSE_INVERT_ROLL = False
+SPACEMOUSE_INVERT_PITCH = False
+
+# Two-button defaults: left=abort, right=mode toggle.
+SPACEMOUSE_BUTTON_ABORT = ("button_0", "left")
+SPACEMOUSE_BUTTON_MODE = ("button_1", "right")
+SPACEMOUSE_BUTTON_INDEX_ABORT = 0
+SPACEMOUSE_BUTTON_INDEX_MODE = 1

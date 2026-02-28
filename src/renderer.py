@@ -425,6 +425,22 @@ class Renderer:
         fixed.setHpr((float(h), float(-p), float(-r)))
         self._orient_preview.setQuat(fixed)
 
+    def set_orientation_preview_visible(self, visible: bool) -> None:
+        """Toggle orientation preview display region visibility."""
+        if self._orient_region is not None:
+            try:
+                self._orient_region.setActive(bool(visible))
+            except Exception:
+                pass
+        if self._orient_preview is not None:
+            try:
+                if visible:
+                    self._orient_preview.show()
+                else:
+                    self._orient_preview.hide()
+            except Exception:
+                pass
+
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""
         self._floor_shadow = self._make_floor_shadow()

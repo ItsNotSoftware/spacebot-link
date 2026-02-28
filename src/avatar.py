@@ -1,14 +1,16 @@
 from __future__ import annotations
+
 from typing import Tuple, cast
+
+from direct.showbase.Loader import Loader
 from panda3d.core import (
-    TransparencyAttrib,
     CullFaceAttrib,
     DepthOffsetAttrib,
+    NodePath,
     Point3,
     Quat,
+    TransparencyAttrib,
 )
-from direct.showbase.Loader import Loader
-from panda3d.core import NodePath
 
 from config import AVATAR_CAMERA_OFFSET
 
@@ -140,3 +142,12 @@ class Avatar:
         new_q = dq * curr_q
         self._back.setQuat(new_q)
         self._front.setQuat(new_q)
+
+    def get_quat(self) -> Quat:
+        """Return avatar orientation quaternion in parent/world frame."""
+        return Quat(self._front.getQuat(self._parent))
+
+    def set_quat(self, quat: Quat) -> None:
+        """Set avatar orientation quaternion in parent/world frame."""
+        self._back.setQuat(self._parent, quat)
+        self._front.setQuat(self._parent, quat)
