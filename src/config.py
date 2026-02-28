@@ -174,6 +174,25 @@ GAMEPAD_REMOTE_ENDPOINT = "tcp://127.0.0.1:5580"
 GAMEPAD_REMOTE_TOPIC = "/gamepad/state"
 GAMEPAD_REMOTE_TIMEOUT_S = 1.0
 
+# Select which remote input daemon to autostart: "gamepad", "spacemouse", "both", "none".
+REMOTE_INPUT_DAEMON = "spacemouse"
+
+# Optional SpaceMouse daemon autostart.
+# The daemon publishes the same remote schema consumed by InputController.
+# Keep disabled by default to avoid binding conflicts when gamepad daemon is also running.
+SPACEMOUSE_REMOTE_AUTOSTART = False
+SPACEMOUSE_REMOTE_ENDPOINT = GAMEPAD_REMOTE_ENDPOINT
+SPACEMOUSE_REMOTE_TOPIC = GAMEPAD_REMOTE_TOPIC
+# SpaceMouse feel tuning (professional-style defaults: responsive, low friction).
+SPACEMOUSE_TRANSLATION_DEADZONE = 0.04
+SPACEMOUSE_ROTATION_DEADZONE = 0.06
+SPACEMOUSE_RESPONSE_CURVE = 1.2
+SPACEMOUSE_SMOOTHING = 0.10
+SPACEMOUSE_INVERT_PITCH = True
+SPACEMOUSE_INVERT_YAW = True
+SPACEMOUSE_INTENT_MIN = 0.55
+SPACEMOUSE_CROSS_DRIFT_MAX = 0.01
+
 # Axis names are resolved against daemon-published axes.
 GAMEPAD_AXIS_LEFT_X = ("left_x", "lx", "abs_x")
 GAMEPAD_AXIS_LEFT_Y = ("left_y", "ly", "abs_y")

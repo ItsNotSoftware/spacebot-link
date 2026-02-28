@@ -13,5 +13,6 @@ dependencies = [
     "panda3d>=1.10.15",
     "panda3d-imgui>=1.0.2",
     "pyglm>=2.8.0",
+    "pyspacemouse>=2.0.0",
     "zmq>=0.0.0",
 ]

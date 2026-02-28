@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import p3dimgui
+from direct.showbase.ShowBase import ShowBase
 from imgui_bundle import imgui
 from panda3d.core import PerspectiveLens
-from direct.showbase.ShowBase import ShowBase
 
 from config import (
     ORIENT_PREVIEW_CROP_TOP,
@@ -685,7 +685,7 @@ class UI:
                 delay_fill_s = max(0.1, float(status.get("response_delay_fill_s", 2.5)))
             except Exception:
                 delay_fill_s = 2.5
-            imgui.text_disabled(f"Robot Response Delay (~{delay_fill_s:.1f}s)")
+            imgui.text_disabled("Robot Response Delay")
             imgui.push_style_color(imgui.Col_.frame_bg, (0.10, 0.14, 0.18, 1.0))
             imgui.push_style_color(imgui.Col_.plot_histogram, (0.20, 0.72, 0.95, 1.0))
             imgui.push_style_color(
