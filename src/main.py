@@ -130,6 +130,9 @@ class SpacebotLinkApp(ShowBase):
         self._avg_fps: float = 0.0
         self._robot_stopped_last: bool = False
         self._avatar_auto_reset_pending_since: Optional[float] = None
+        self._avatar_auto_reset_pending_pose: Optional[Tuple[float, float, float]] = (
+            None
+        )
         self._avatar_auto_reset_done: bool = False
         self._avatar_spawned_from_pose: bool = False
         self._last_path_poses: List = []
@@ -817,12 +820,14 @@ class SpacebotLinkApp(ShowBase):
         is_zero = is_zero_cmd_vel(payload)
         if self.input.is_robot_mode():
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
             self._avatar_auto_reset_done = False
             self._robot_stopped_last = is_zero
             return
 
         if not is_zero:
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
             self._avatar_auto_reset_done = False
             self._robot_stopped_last = False
             return
@@ -833,11 +838,13 @@ class SpacebotLinkApp(ShowBase):
 
         if self.nav.state.last_robot_pose_panda is None:
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
             self._robot_stopped_last = True
             return
 
         if self.input.is_any_input_active():
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
             self._robot_stopped_last = True
             return
 
@@ -849,19 +856,39 @@ class SpacebotLinkApp(ShowBase):
         dist = (dx * dx + dy * dy + dz * dz) ** 0.5
         if dist > AVATAR_AUTO_RESET_DISTANCE:
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
             self._robot_stopped_last = True
             return
 
         now = self.taskMgr.globalClock.getFrameTime()
         if self._avatar_auto_reset_pending_since is None:
             self._avatar_auto_reset_pending_since = now
+            self._avatar_auto_reset_pending_pose = (
+                float(avatar_pos[0]),
+                float(avatar_pos[1]),
+                float(avatar_pos[2]),
+            )
             self._robot_stopped_last = True
             return
+
+        pending_pose = self._avatar_auto_reset_pending_pose
+        if pending_pose is not None:
+            pdx = float(avatar_pos[0]) - pending_pose[0]
+            pdy = float(avatar_pos[1]) - pending_pose[1]
+            pdz = float(avatar_pos[2]) - pending_pose[2]
+            # Cancel auto-reset as soon as avatar moves during the pending window.
+            if (pdx * pdx + pdy * pdy + pdz * pdz) > 1e-6:
+                self._avatar_auto_reset_pending_since = None
+                self._avatar_auto_reset_pending_pose = None
+                self._avatar_auto_reset_done = False
+                self._robot_stopped_last = True
+                return
 
         if (now - self._avatar_auto_reset_pending_since) >= AVATAR_AUTO_RESET_DELAY_S:
             self.renderer.sync_avatar_to_robot(self.nav.state.last_robot_pose_panda)
             self._avatar_auto_reset_done = True
             self._avatar_auto_reset_pending_since = None
+            self._avatar_auto_reset_pending_pose = None
         self._robot_stopped_last = True
 
     def _update_avatar_visibility(self, robot_pose: Tuple) -> None:
