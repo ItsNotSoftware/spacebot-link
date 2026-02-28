@@ -13,11 +13,11 @@ from config import (
     DOWN_BUTTON,
     DOWN_BUTTON_ALT,
     FORWARD_BUTTON,
-    GAMEPAD_AXIS_L2,
+    GAMEPAD_AUTOSCALE_DECAY,
+    GAMEPAD_AUTOSCALE_MAX_GAIN,
+    GAMEPAD_AUTOSCALE_MIN,
     GAMEPAD_AXIS_DPAD_X,
     GAMEPAD_AXIS_DPAD_Y,
-    GAMEPAD_AXIS_LEFT_X,
-    GAMEPAD_AXIS_LEFT_Y,
     GAMEPAD_AXIS_INDEX_DPAD_X,
     GAMEPAD_AXIS_INDEX_DPAD_Y,
     GAMEPAD_AXIS_INDEX_L2,
@@ -26,27 +26,31 @@ from config import (
     GAMEPAD_AXIS_INDEX_R2,
     GAMEPAD_AXIS_INDEX_RIGHT_X,
     GAMEPAD_AXIS_INDEX_RIGHT_Y,
+    GAMEPAD_AXIS_L2,
+    GAMEPAD_AXIS_LEFT_X,
+    GAMEPAD_AXIS_LEFT_Y,
+    GAMEPAD_AXIS_LOCK_RATIO_LEFT,
+    GAMEPAD_AXIS_LOCK_RATIO_RIGHT,
     GAMEPAD_AXIS_R2,
     GAMEPAD_AXIS_RIGHT_X,
     GAMEPAD_AXIS_RIGHT_Y,
-    GAMEPAD_AXIS_LOCK_RATIO_LEFT,
-    GAMEPAD_AXIS_LOCK_RATIO_RIGHT,
-    GAMEPAD_BUTTON_L1,
-    GAMEPAD_BUTTON_R1,
     GAMEPAD_BUTTON_ABORT,
-    GAMEPAD_BUTTON_L3,
-    GAMEPAD_BUTTON_R3,
-    GAMEPAD_BUTTON_TOUCHPAD,
-    GAMEPAD_BUTTON_TRIANGLE,
-    GAMEPAD_BUTTON_X,
     GAMEPAD_BUTTON_INDEX_ABORT,
     GAMEPAD_BUTTON_INDEX_L1,
-    GAMEPAD_BUTTON_INDEX_R1,
     GAMEPAD_BUTTON_INDEX_L3,
+    GAMEPAD_BUTTON_INDEX_R1,
     GAMEPAD_BUTTON_INDEX_R3,
     GAMEPAD_BUTTON_INDEX_TOUCHPAD,
     GAMEPAD_BUTTON_INDEX_TRIANGLE,
     GAMEPAD_BUTTON_INDEX_X,
+    GAMEPAD_BUTTON_L1,
+    GAMEPAD_BUTTON_L3,
+    GAMEPAD_BUTTON_R1,
+    GAMEPAD_BUTTON_R3,
+    GAMEPAD_BUTTON_TOUCHPAD,
+    GAMEPAD_BUTTON_TRIANGLE,
+    GAMEPAD_BUTTON_X,
+    GAMEPAD_DPAD_THRESHOLD,
     GAMEPAD_ENABLED,
     GAMEPAD_INVERT_PITCH,
     GAMEPAD_INVERT_ROLL,
@@ -58,31 +62,28 @@ from config import (
     GAMEPAD_MOVE_DEADZONE,
     GAMEPAD_MOVE_SCALE,
     GAMEPAD_MOVE_SMOOTHING,
-    GAMEPAD_AUTOSCALE_DECAY,
-    GAMEPAD_AUTOSCALE_MAX_GAIN,
-    GAMEPAD_AUTOSCALE_MIN,
-    GAMEPAD_DPAD_THRESHOLD,
     GAMEPAD_REMOTE_AUTOSTART,
     GAMEPAD_REMOTE_ENABLED,
     GAMEPAD_REMOTE_ENDPOINT,
     GAMEPAD_REMOTE_TOPIC,
     GAMEPAD_TRIGGER_DEADZONE,
     GAMEPAD_TRIGGER_SMOOTHING,
+    GAMEPAD_VERTICAL_SCALE,
     LEFT_BUTTON,
     MOVE_SPEED,
+    PITCH_DOWN_BUTTON,
+    PITCH_UP_BUTTON,
     RESET_ORIENT_BUTTON,
     RESET_TO_ROBOT_ORIENT_BUTTON,
     RIGHT_BUTTON,
-    ROTATE_SPEED,
     ROLL_LEFT_BUTTON,
     ROLL_RIGHT_BUTTON,
-    PITCH_DOWN_BUTTON,
-    PITCH_UP_BUTTON,
+    ROTATE_SPEED,
+    TOPIC_CMD_VEL,
     UP_BUTTON,
     UP_BUTTON_ALT,
     YAW_LEFT_BUTTON,
     YAW_RIGHT_BUTTON,
-    TOPIC_CMD_VEL,
 )
 from teleop_bus import TeleopBusSub
 
@@ -114,7 +115,9 @@ class _RemoteGamepad:
         self.last_payload_ts = float(payload.get("ts", 0.0))
         self.last_update = now
 
-    def axis_value(self, axis_names: tuple[str, ...], axis_index: Optional[int]) -> float:
+    def axis_value(
+        self, axis_names: tuple[str, ...], axis_index: Optional[int]
+    ) -> float:
         for name in axis_names:
             if name in self.axes:
                 return float(self.axes[name])
@@ -290,7 +293,9 @@ class InputController:
             self.renderer.set_avatar_visible(False)
         else:
             if self._nav_publish_before_robot_mode is not None:
-                self.nav.state.nav_publishing_enabled = self._nav_publish_before_robot_mode
+                self.nav.state.nav_publishing_enabled = (
+                    self._nav_publish_before_robot_mode
+                )
             self._nav_publish_before_robot_mode = None
             self.renderer.set_avatar_visible(True)
         if not self._move_robot:
@@ -326,7 +331,7 @@ class InputController:
             UP_BUTTON,
             UP_BUTTON_ALT,
             DOWN_BUTTON,
-    DOWN_BUTTON_ALT,
+            DOWN_BUTTON_ALT,
             YAW_LEFT_BUTTON,
             YAW_RIGHT_BUTTON,
             PITCH_UP_BUTTON,
@@ -376,9 +381,13 @@ class InputController:
                 lt, rt = self._triggers(gp)
                 move.x += lx * MOVE_SPEED * dt
                 move.y += (-ly) * MOVE_SPEED * dt
-                move.z += (rt - lt) * MOVE_SPEED * dt
+                move.z += (rt - lt) * MOVE_SPEED * GAMEPAD_VERTICAL_SCALE * dt
             if move.length_squared() > 0:
-                frame = self.base.camera if self.base.camera is not None else self.base.render
+                frame = (
+                    self.base.camera
+                    if self.base.camera is not None
+                    else self.base.render
+                )
                 q = frame.getQuat(self.base.render)
                 delta = q.xform(move)
                 self.renderer.move_avatar(delta.x, delta.y, delta.z)
@@ -459,7 +468,7 @@ class InputController:
                 lt, rt = self._triggers(gp)
                 gx = (-ly) * MOVE_SPEED
                 gy = lx * MOVE_SPEED
-                gz = (rt - lt) * MOVE_SPEED
+                gz = (rt - lt) * MOVE_SPEED * GAMEPAD_VERTICAL_SCALE
                 if gx != 0.0:
                     lin_x = gx
                 if gy != 0.0:
@@ -577,19 +586,28 @@ class InputController:
         return self._trigger_filter_l.apply(lt), self._trigger_filter_r.apply(rt)
 
     def _axis_value(
-        self, device: _RemoteGamepad, axis_names: tuple[str, ...], axis_index: Optional[int]
+        self,
+        device: _RemoteGamepad,
+        axis_names: tuple[str, ...],
+        axis_index: Optional[int],
     ) -> float:
         return device.axis_value(axis_names, axis_index)
 
     def _trigger_value(
-        self, device: _RemoteGamepad, axis_names: tuple[str, ...], axis_index: Optional[int]
+        self,
+        device: _RemoteGamepad,
+        axis_names: tuple[str, ...],
+        axis_index: Optional[int],
     ) -> float:
         value = device.axis_value(axis_names, axis_index)
         value = max(0.0, min(1.0, value))
         return value
 
     def _button_down(
-        self, device: _RemoteGamepad, button_names: tuple[str, ...], button_index: Optional[int]
+        self,
+        device: _RemoteGamepad,
+        button_names: tuple[str, ...],
+        button_index: Optional[int],
     ) -> bool:
         pressed = device.button_value(button_names, button_index)
         if pressed:
@@ -597,7 +615,10 @@ class InputController:
         return pressed
 
     def _button_pressed(
-        self, device: _RemoteGamepad, button_names: tuple[str, ...], button_index: Optional[int]
+        self,
+        device: _RemoteGamepad,
+        button_names: tuple[str, ...],
+        button_index: Optional[int],
     ) -> bool:
         key = f"edge:{button_index}:{button_names}"
         pressed = device.button_value(button_names, button_index)
@@ -672,9 +693,15 @@ class InputController:
             return True
         if abs(rx) > GAMEPAD_LOOK_DEADZONE or abs(ry) > GAMEPAD_LOOK_DEADZONE:
             return True
-        if gp.axis_value(GAMEPAD_AXIS_L2, GAMEPAD_AXIS_INDEX_L2) > GAMEPAD_TRIGGER_DEADZONE:
+        if (
+            gp.axis_value(GAMEPAD_AXIS_L2, GAMEPAD_AXIS_INDEX_L2)
+            > GAMEPAD_TRIGGER_DEADZONE
+        ):
             return True
-        if gp.axis_value(GAMEPAD_AXIS_R2, GAMEPAD_AXIS_INDEX_R2) > GAMEPAD_TRIGGER_DEADZONE:
+        if (
+            gp.axis_value(GAMEPAD_AXIS_R2, GAMEPAD_AXIS_INDEX_R2)
+            > GAMEPAD_TRIGGER_DEADZONE
+        ):
             return True
         if self._button_down(gp, GAMEPAD_BUTTON_L1, GAMEPAD_BUTTON_INDEX_L1):
             return True
@@ -688,8 +715,12 @@ class InputController:
             return True
         if self._button_down(gp, GAMEPAD_BUTTON_X, GAMEPAD_BUTTON_INDEX_X):
             return True
-        if self._button_down(gp, GAMEPAD_BUTTON_TRIANGLE, GAMEPAD_BUTTON_INDEX_TRIANGLE):
+        if self._button_down(
+            gp, GAMEPAD_BUTTON_TRIANGLE, GAMEPAD_BUTTON_INDEX_TRIANGLE
+        ):
             return True
-        if self._button_down(gp, GAMEPAD_BUTTON_TOUCHPAD, GAMEPAD_BUTTON_INDEX_TOUCHPAD):
+        if self._button_down(
+            gp, GAMEPAD_BUTTON_TOUCHPAD, GAMEPAD_BUTTON_INDEX_TOUCHPAD
+        ):
             return True
         return False
