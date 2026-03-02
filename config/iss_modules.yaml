@@ -35,6 +35,7 @@ modules:
   JPM:
     points:
       - [15.12, 6.25]
+      - [15.27, 11.69]
 
   PMM:
     points:
