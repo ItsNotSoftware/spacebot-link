@@ -27,6 +27,9 @@ from config import (
     FRAMEBUFFER_SRGB_CFG,
     GAMEPAD_REMOTE_ENDPOINT,
     GAMEPAD_REMOTE_TOPIC,
+    ISS_MODULE_DETECT_PERIOD_S,
+    ISS_MODULE_MAX_MATCH_DISTANCE_M,
+    ISS_MODULE_POINTS_YAML,
     OCTOMAP_QUERY_PERIOD_S,
     OCTOMAP_SERVER_BIN,
     OCTOMAP_SERVER_ENDPOINT,
@@ -164,6 +167,12 @@ class SpacebotLinkApp(ShowBase):
         self._last_exec_summary_force: Any = None
         self._total_flight_length_m: float = 0.0
         self._last_distance_pose: Optional[Tuple[float, float, float]] = None
+        self._operational_start_s: float = time.monotonic()
+        self._iss_module_points: Dict[str, List[Tuple[float, float]]] = (
+            self._load_iss_module_points()
+        )
+        self._current_iss_module: Optional[str] = None
+        self._current_iss_module_dist_m: Optional[float] = None
         self._install_cmd_publish_tracking()
 
         # UI + status
@@ -180,6 +189,11 @@ class SpacebotLinkApp(ShowBase):
         self.taskMgr.add(self._path_task, "PathTask")
         self.taskMgr.doMethodLater(
             OCTOMAP_QUERY_PERIOD_S, self._octomap_task, "OctomapTask"
+        )
+        self.taskMgr.doMethodLater(
+            ISS_MODULE_DETECT_PERIOD_S,
+            self._iss_module_task,
+            "IssModuleTask",
         )
         self.taskMgr.doMethodLater(
             self.nav.follow_sample_period, self._follow_mode_tick, "FollowModeTick"
@@ -205,6 +219,96 @@ class SpacebotLinkApp(ShowBase):
             return max(0.0, min(1.0, float(raw)))
         except Exception:
             return None
+
+    def _load_iss_module_points(self) -> Dict[str, List[Tuple[float, float]]]:
+        """Load ROS XY reference points by ISS module from YAML."""
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        cfg_path = os.path.abspath(os.path.join(root_dir, ISS_MODULE_POINTS_YAML))
+        if not os.path.isfile(cfg_path):
+            print(f"[module] module points file not found: {cfg_path}")
+            return {}
+
+        try:
+            import yaml
+        except Exception as exc:
+            print(f"[module] PyYAML not available; module detection disabled: {exc}")
+            return {}
+
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as exc:
+            print(f"[module] failed to read module points YAML: {exc}")
+            return {}
+
+        modules_obj = data.get("modules") if isinstance(data, dict) else None
+        if not isinstance(modules_obj, dict):
+            return {}
+
+        out: Dict[str, List[Tuple[float, float]]] = {}
+        for module_name, module_data in modules_obj.items():
+            if not isinstance(module_name, str):
+                continue
+            points_obj = None
+            if isinstance(module_data, dict):
+                points_obj = module_data.get("points")
+            elif isinstance(module_data, list):
+                points_obj = module_data
+            if not isinstance(points_obj, list):
+                continue
+
+            parsed_points: List[Tuple[float, float]] = []
+            for entry in points_obj:
+                x = None
+                y = None
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    x, y = entry[0], entry[1]
+                elif isinstance(entry, dict):
+                    x, y = entry.get("x"), entry.get("y")
+                try:
+                    xf = float(x)
+                    yf = float(y)
+                except Exception:
+                    continue
+                if math.isfinite(xf) and math.isfinite(yf):
+                    parsed_points.append((xf, yf))
+            if parsed_points:
+                out[module_name] = parsed_points
+
+        if not out:
+            print(f"[module] no valid module points found in: {cfg_path}")
+        return out
+
+    def _update_current_iss_module(self) -> None:
+        """Classify robot module by nearest configured ROS XY point."""
+        robot_pose = self.nav.state.last_ros_pose
+        if robot_pose is None or not self._iss_module_points:
+            self._current_iss_module = None
+            self._current_iss_module_dist_m = None
+            return
+
+        (rx, ry, _rz), _ = robot_pose
+        best_module = None
+        best_dist = float("inf")
+        for module_name, points in self._iss_module_points.items():
+            for px, py in points:
+                dist = math.hypot(float(rx) - px, float(ry) - py)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_module = module_name
+
+        if best_module is None or not math.isfinite(best_dist):
+            self._current_iss_module = None
+            self._current_iss_module_dist_m = None
+            return
+
+        if best_dist > float(ISS_MODULE_MAX_MATCH_DISTANCE_M):
+            self._current_iss_module = "unknown"
+            self._current_iss_module_dist_m = float(best_dist)
+            return
+
+        self._current_iss_module = best_module
+        self._current_iss_module_dist_m = float(best_dist)
 
     def _install_cmd_publish_tracking(self) -> None:
         """Wrap the command publisher to timestamp outgoing commands for UI latency display."""
@@ -335,6 +439,11 @@ class SpacebotLinkApp(ShowBase):
         if rgb is not None:
             self.renderer.update_bg_frame(rgb)
         return Task.cont
+
+    def _iss_module_task(self, task: PythonTask) -> int:
+        """Refresh nearest ISS module classification at a fixed cadence."""
+        self._update_current_iss_module()
+        return Task.again
 
     def _pose_task(self, task: PythonTask) -> int:
         """Track robot pose and drive camera/avatar sync logic."""
@@ -710,6 +819,11 @@ class SpacebotLinkApp(ShowBase):
             "response_delay_fill": response_delay_fill,
             "response_delay_fill_s": float(UI_RESPONSE_DELAY_FILL_S),
             "total_flight_length_m": float(self._total_flight_length_m),
+            "operational_time_s": max(
+                0.0, float(time.monotonic() - self._operational_start_s)
+            ),
+            "current_iss_module": self._current_iss_module,
+            "current_iss_module_distance_m": self._current_iss_module_dist_m,
             "last_cmd_latency_s": self._last_cmd_latency_s,
             "last_cmd_latency_label": self._last_cmd_latency_label,
             "last_cmd_pending_age_s": self._last_pending_command_age_s(),
@@ -768,12 +882,13 @@ class SpacebotLinkApp(ShowBase):
             "set_anim_speed": self._set_anim_speed,
             "set_anim_instances": self._set_anim_instances,
             "set_anim_line_enabled": self._set_anim_line_enabled,
-            "reset_flight_length": self._reset_flight_length,
+            "reset_session_metrics": self._reset_session_metrics,
         }
 
-    def _reset_flight_length(self) -> None:
-        """Clear integrated robot travel distance for the current session."""
+    def _reset_session_metrics(self) -> None:
+        """Reset session meters: integrated distance and operational time."""
         self._total_flight_length_m = 0.0
+        self._operational_start_s = time.monotonic()
         robot_pose = self.nav.state.last_robot_pose_panda
         if robot_pose is None:
             self._last_distance_pose = None

@@ -1,0 +1,51 @@
+# ISS module reference points in ROS frame (meters).
+# Add one or more interior points per module. The nearest point (Euclidean XY)
+# determines the current module.
+#
+# Example point formats accepted by the app:
+# - [x, y]
+# - {x: 1.23, y: 4.56}
+
+modules:
+  Airlock:
+    points:
+      - [0.0, 0.0]
+
+  "Node 1":
+    points:
+      - [0.0, 2.0]
+      - [1.0, 3.5]
+      - [0.0, 4.0]
+
+  "Node 3":
+    points:
+      - [0.0, 5.8]
+      - [-1.5, 9.55]
+      - [0.32, 9.72]
+
+  Beam:
+    points:
+      - [-2.4, 9.55]
+
+  "US Lab":
+    points:
+      - [1.64, 3.28]
+      - [9.68, 3.46]
+
+  JPM:
+    points:
+      - [15.12, 6.25]
+
+  PMM:
+    points:
+      - [2.46, 9.9]
+
+  Node2:
+    points:
+      - [10.98, 3.37]
+      - [14.88, 2.51]
+      - [15.0, 4.76]
+
+  Columbus:
+    points:
+      - [15.11, 0.98]

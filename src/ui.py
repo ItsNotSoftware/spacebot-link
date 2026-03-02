@@ -304,6 +304,16 @@ class UI:
             draw.add_rect((x0, y0), (x1, y1), border_col, rounding)
             imgui.dummy((bar_w, bar_h))
 
+        def _format_hhmmss(seconds: Any) -> str:
+            try:
+                total = max(0, int(float(seconds)))
+            except Exception:
+                return "00:00:00"
+            h = total // 3600
+            m = (total % 3600) // 60
+            s = total % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
         fps_text = status.get("fps", 0.0)
         imgui.text(f"FPS: {fps_text:.1f}")
 
@@ -313,6 +323,12 @@ class UI:
         imgui.text_disabled("|")
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
+        current_module = status.get("current_iss_module")
+        if current_module:
+            imgui.same_line()
+            imgui.text_disabled("|")
+            imgui.same_line()
+            imgui.text(f"Module: {current_module}")
         total_len = status.get("total_flight_length_m")
         if total_len is not None:
             imgui.same_line()
@@ -322,6 +338,12 @@ class UI:
                 imgui.text(f"Distance: {float(total_len):.2f} m")
             except Exception:
                 imgui.text(f"Distance: {total_len}")
+        op_time_s = status.get("operational_time_s")
+        if op_time_s is not None:
+            imgui.same_line()
+            imgui.text_disabled("|")
+            imgui.same_line()
+            imgui.text(f"Operational: {_format_hhmmss(op_time_s)}")
         path_goodness = status.get("path_goodness")
         quality_badge = _quality_badge(path_goodness)
         if quality_badge is not None:
@@ -520,8 +542,14 @@ class UI:
                 imgui.text(f"Total flight length: {float(total_len):.3f} m")
             except Exception:
                 imgui.text(f"Total flight length: {total_len}")
-            if imgui.button("Reset distance"):
-                status.get("reset_flight_length", lambda: None)()
+        op_time_s = status.get("operational_time_s")
+        if op_time_s is not None:
+            imgui.spacing()
+            imgui.text(f"Operational time: {_format_hhmmss(op_time_s)}")
+        if total_len is not None or op_time_s is not None:
+            imgui.spacing()
+            if imgui.button("Reset"):
+                status.get("reset_session_metrics", lambda: None)()
         if self._show_octomap:
             imgui.begin_child("OctoMap", (0, 220), True)
             imgui.text("OctoMap Raycast")
@@ -682,6 +710,16 @@ class UI:
             (0.60, 0.18, 0.18, 1.0),
         ):
             self.trigger_abort()
+
+        module_name = status.get("current_iss_module")
+        if module_name:
+            imgui.spacing()
+            label = str(module_name).strip()
+            if label.lower() == "unknown":
+                module_color = (1.0, 0.72, 0.36, 1.0)
+            else:
+                module_color = (0.70, 0.92, 1.0, 1.0)
+            _text_bold(module_color, f"CURRENT MODULE: {label.upper()}")
 
         quality_badge = _quality_badge(status.get("path_goodness"))
         if quality_badge is not None:
