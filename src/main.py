@@ -28,7 +28,6 @@ from config import (
     GAMEPAD_REMOTE_ENDPOINT,
     GAMEPAD_REMOTE_TOPIC,
     ISS_MODULE_DETECT_PERIOD_S,
-    ISS_MODULE_MAX_MATCH_DISTANCE_M,
     ISS_MODULE_POINTS_YAML,
     OCTOMAP_QUERY_PERIOD_S,
     OCTOMAP_SERVER_BIN,
@@ -300,11 +299,6 @@ class SpacebotLinkApp(ShowBase):
         if best_module is None or not math.isfinite(best_dist):
             self._current_iss_module = None
             self._current_iss_module_dist_m = None
-            return
-
-        if best_dist > float(ISS_MODULE_MAX_MATCH_DISTANCE_M):
-            self._current_iss_module = "unknown"
-            self._current_iss_module_dist_m = float(best_dist)
             return
 
         self._current_iss_module = best_module
