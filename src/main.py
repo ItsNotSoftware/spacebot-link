@@ -86,6 +86,8 @@ except Exception:
 
 
 class SpacebotLinkApp(ShowBase):
+    _STATUS_CACHE_PERIOD_S = 0.05
+
     @staticmethod
     def _select_remote_input_daemon() -> str:
         value = os.getenv("REMOTE_INPUT_DAEMON", REMOTE_INPUT_DAEMON)
@@ -129,6 +131,7 @@ class SpacebotLinkApp(ShowBase):
 
         # metrics
         self._fps_samples = deque(maxlen=120)
+        self._fps_sum: float = 0.0
         self._avg_fps: float = 0.0
         self._robot_stopped_last: bool = False
         self._avatar_auto_reset_pending_since: Optional[float] = None
@@ -172,6 +175,8 @@ class SpacebotLinkApp(ShowBase):
         )
         self._current_iss_module: Optional[str] = None
         self._current_iss_module_dist_m: Optional[float] = None
+        self._status_cache: Optional[Dict[str, Any]] = None
+        self._status_cache_next_s: float = 0.0
         self._install_cmd_publish_tracking()
 
         # UI + status
@@ -721,11 +726,13 @@ class SpacebotLinkApp(ShowBase):
         """Accumulate FPS samples for display."""
         dt = self.taskMgr.globalClock.getDt()
         if dt > 1e-6:
-            self._fps_samples.append(1.0 / dt)
+            fps = 1.0 / dt
+            if len(self._fps_samples) == self._fps_samples.maxlen:
+                self._fps_sum -= self._fps_samples[0]
+            self._fps_samples.append(fps)
+            self._fps_sum += fps
         self._avg_fps = (
-            (sum(self._fps_samples) / len(self._fps_samples))
-            if self._fps_samples
-            else 0.0
+            (self._fps_sum / len(self._fps_samples)) if self._fps_samples else 0.0
         )
         return Task.cont
 
@@ -787,6 +794,14 @@ class SpacebotLinkApp(ShowBase):
     # ---- helpers ----
     def _collect_status(self) -> Dict[str, Any]:
         """Assemble a status snapshot for the overlay."""
+        now_s = time.monotonic()
+        if self._status_cache is not None and now_s < self._status_cache_next_s:
+            status_cached = dict(self._status_cache)
+            status_cached["operational_time_s"] = max(
+                0.0, float(now_s - self._operational_start_s)
+            )
+            return status_cached
+
         avatar_pose = self.renderer.get_avatar_pose()
         avatar_ros = panda_pose_to_ros_tuple(avatar_pose)
         response_delay_fill = self._avatar_delay_fill_progress(avatar_pose)
@@ -802,7 +817,7 @@ class SpacebotLinkApp(ShowBase):
         if self.nav.state.follow_path_points:
             follow_tip = self.nav.state.follow_path_points[-1][0]
 
-        return {
+        status = {
             "fps": self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate,
             "mode": self.ui.mode,
             "move_robot": self.input.is_robot_mode(),
@@ -878,11 +893,15 @@ class SpacebotLinkApp(ShowBase):
             "set_anim_line_enabled": self._set_anim_line_enabled,
             "reset_session_metrics": self._reset_session_metrics,
         }
+        self._status_cache = status
+        self._status_cache_next_s = now_s + float(self._STATUS_CACHE_PERIOD_S)
+        return status
 
     def _reset_session_metrics(self) -> None:
         """Reset session meters: integrated distance and operational time."""
         self._total_flight_length_m = 0.0
         self._operational_start_s = time.monotonic()
+        self._status_cache_next_s = 0.0
         robot_pose = self.nav.state.last_robot_pose_panda
         if robot_pose is None:
             self._last_distance_pose = None
