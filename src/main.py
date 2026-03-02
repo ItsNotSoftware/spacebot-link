@@ -177,6 +177,10 @@ class SpacebotLinkApp(ShowBase):
         self._current_iss_module_dist_m: Optional[float] = None
         self._status_cache: Optional[Dict[str, Any]] = None
         self._status_cache_next_s: float = 0.0
+        self._direct_mode: bool = bool(self.input.is_robot_mode())
+        self._floor_projection_before_direct_mode: bool = bool(
+            self._floor_projection_enabled
+        )
         self._install_cmd_publish_tracking()
 
         # UI + status
@@ -569,6 +573,9 @@ class SpacebotLinkApp(ShowBase):
         self._octomap_socket = sock
 
     def _octomap_task(self, task: PythonTask) -> int:
+        if self._direct_mode:
+            self.renderer.clear_floor_indicator()
+            return Task.again
         if self._octomap_proc is not None:
             rc = self._octomap_proc.poll()
             if rc is not None:
@@ -712,10 +719,15 @@ class SpacebotLinkApp(ShowBase):
     def _keyboard_task(self, task: PythonTask) -> int:
         """Handle keyboard/gamepad-driven avatar/robot control."""
         self.input.poll()
+        move_robot = bool(self.input.is_robot_mode())
+        if move_robot != self._direct_mode:
+            self._set_direct_mode(move_robot)
         return Task.cont
 
     def _orientation_preview_task(self, task: PythonTask) -> int:
         """Update the orientation preview models."""
+        if self._direct_mode:
+            return Task.cont
         robot_ros_orientation = self.nav.state.last_ros_orientation
         avatar_pose = self.renderer.get_avatar_pose()
         self.renderer.update_orientation_preview_motion_hint(avatar_pose)
@@ -763,6 +775,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _path_task(self, task: PythonTask) -> int:
         """Render path markers from nav path or follow buffer."""
+        if self._direct_mode:
+            self.renderer.clear_path_markers()
+            return Task.cont
         if self.ui.mode == "Follow Mode":
             self.renderer.render_path_markers(self.nav.state.follow_path_points)
             return Task.cont
@@ -821,6 +836,7 @@ class SpacebotLinkApp(ShowBase):
         status = {
             "fps": self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate,
             "mode": self.ui.mode,
+            "direct_mode": self._direct_mode,
             "move_robot": self.input.is_robot_mode(),
             "nav_enabled": self.nav.state.nav_publishing_enabled,
             "waypoint_count": len(self.nav.state.follow_path_points),
@@ -878,6 +894,7 @@ class SpacebotLinkApp(ShowBase):
             "set_floor_projection_enabled": self._set_floor_projection_enabled,
             "set_nav_enabled": self._set_nav_enabled,
             "set_move_mode": self.input.set_move_mode,
+            "set_direct_mode": self._set_direct_mode,
             "activate_follow": self._activate_follow_mode,
             "activate_goal": self._activate_goal_mode,
             "reset_orientation": self.renderer.reset_avatar_to_camera_hpr,
@@ -919,6 +936,29 @@ class SpacebotLinkApp(ShowBase):
         self._floor_projection_enabled = bool(enabled)
         if not self._floor_projection_enabled:
             self.renderer.clear_floor_indicator()
+
+    def _set_direct_mode(self, enabled: bool) -> None:
+        """Toggle raw direct teleop mode and strip/restore auxiliary visuals."""
+        enabled = bool(enabled)
+        if enabled == self._direct_mode:
+            return
+        self.input.set_move_mode(enabled)
+        self._direct_mode = enabled
+        if enabled:
+            self._floor_projection_before_direct_mode = bool(
+                self._floor_projection_enabled
+            )
+            self._floor_projection_enabled = False
+            self.renderer.clear_floor_indicator()
+            self.renderer.clear_path_markers()
+            self.renderer.set_orientation_preview_visible(False)
+        else:
+            self._floor_projection_enabled = bool(
+                self._floor_projection_before_direct_mode
+            )
+            self.renderer.set_orientation_preview_visible(True)
+            self._rerender_path()
+        self._status_cache_next_s = 0.0
 
     def _activate_goal_mode(self) -> None:
         """Switch to goal mode and seed last goal pose."""
@@ -1059,6 +1099,9 @@ class SpacebotLinkApp(ShowBase):
 
     def _rerender_path(self) -> None:
         """Force a re-render of the current path with latest viz settings."""
+        if self._direct_mode:
+            self.renderer.clear_path_markers()
+            return
         if self.ui.mode == "Follow Mode":
             self.renderer.render_path_markers(self.nav.state.follow_path_points)
         elif self._last_path_poses:
