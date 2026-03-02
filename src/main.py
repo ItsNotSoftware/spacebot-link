@@ -162,6 +162,8 @@ class SpacebotLinkApp(ShowBase):
         self._last_cmd_vel_echo_payload: Any = None
         self._last_exec_summary_vel: Any = None
         self._last_exec_summary_force: Any = None
+        self._total_flight_length_m: float = 0.0
+        self._last_distance_pose: Optional[Tuple[float, float, float]] = None
         self._install_cmd_publish_tracking()
 
         # UI + status
@@ -350,6 +352,15 @@ class SpacebotLinkApp(ShowBase):
         parsed_pos_hpr = ros_pose_to_panda_pos_hpr(payload)
         if parsed_pos_hpr is not None:
             pos, hpr = parsed_pos_hpr
+            last_pos = self._last_distance_pose
+            if last_pos is not None:
+                dx = float(pos[0]) - last_pos[0]
+                dy = float(pos[1]) - last_pos[1]
+                dz = float(pos[2]) - last_pos[2]
+                step_m = (dx * dx + dy * dy + dz * dz) ** 0.5
+                if math.isfinite(step_m):
+                    self._total_flight_length_m += max(0.0, step_m)
+            self._last_distance_pose = (float(pos[0]), float(pos[1]), float(pos[2]))
             self.nav.update_robot_pose(
                 parsed_pos_hpr, self.nav.state.last_ros_pose, ori
             )
@@ -698,6 +709,7 @@ class SpacebotLinkApp(ShowBase):
             "path_pose_count": len(self._last_path_poses),
             "response_delay_fill": response_delay_fill,
             "response_delay_fill_s": float(UI_RESPONSE_DELAY_FILL_S),
+            "total_flight_length_m": float(self._total_flight_length_m),
             "last_cmd_latency_s": self._last_cmd_latency_s,
             "last_cmd_latency_label": self._last_cmd_latency_label,
             "last_cmd_pending_age_s": self._last_pending_command_age_s(),
@@ -756,7 +768,18 @@ class SpacebotLinkApp(ShowBase):
             "set_anim_speed": self._set_anim_speed,
             "set_anim_instances": self._set_anim_instances,
             "set_anim_line_enabled": self._set_anim_line_enabled,
+            "reset_flight_length": self._reset_flight_length,
         }
+
+    def _reset_flight_length(self) -> None:
+        """Clear integrated robot travel distance for the current session."""
+        self._total_flight_length_m = 0.0
+        robot_pose = self.nav.state.last_robot_pose_panda
+        if robot_pose is None:
+            self._last_distance_pose = None
+            return
+        (x, y, z), _ = robot_pose
+        self._last_distance_pose = (float(x), float(y), float(z))
 
     def _set_nav_enabled(self, enabled: bool) -> None:
         """Toggle publishing of goals/paths."""

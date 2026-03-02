@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from panda3d.core import KeyboardButton
 
+# Select which remote input daemon to autostart: "gamepad", "spacemouse", "both", "none".
+REMOTE_INPUT_DAEMON = "spacemouse"
+
 # Window / rendering
 WINDOW_TITLE = "SpaceBotLink"
 FRAMEBUFFER_SRGB_CFG = "framebuffer-srgb true"
@@ -175,8 +178,6 @@ GAMEPAD_REMOTE_ENDPOINT = "tcp://127.0.0.1:5580"
 GAMEPAD_REMOTE_TOPIC = "/gamepad/state"
 GAMEPAD_REMOTE_TIMEOUT_S = 1.0
 
-# Select which remote input daemon to autostart: "gamepad", "spacemouse", "both", "none".
-REMOTE_INPUT_DAEMON = "gamepad"
 
 # Optional SpaceMouse daemon autostart.
 # The daemon publishes the same remote schema consumed by InputController.
@@ -185,8 +186,8 @@ SPACEMOUSE_REMOTE_AUTOSTART = False
 SPACEMOUSE_REMOTE_ENDPOINT = GAMEPAD_REMOTE_ENDPOINT
 SPACEMOUSE_REMOTE_TOPIC = GAMEPAD_REMOTE_TOPIC
 # SpaceMouse feel tuning (professional-style defaults: responsive, low friction).
-SPACEMOUSE_AXIS_SCALE = 1.15
-SPACEMOUSE_VERTICAL_SCALE = 0.42
+SPACEMOUSE_AXIS_SCALE = 1.50
+SPACEMOUSE_VERTICAL_SCALE = 0.55
 SPACEMOUSE_TRANSLATION_DEADZONE = 0.04
 SPACEMOUSE_ROTATION_DEADZONE = 0.06
 SPACEMOUSE_RESPONSE_CURVE = 1.35

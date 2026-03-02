@@ -313,6 +313,15 @@ class UI:
         imgui.text_disabled("|")
         imgui.same_line()
         imgui.text(f"Waypoints: {status.get('waypoint_count', 0)}")
+        total_len = status.get("total_flight_length_m")
+        if total_len is not None:
+            imgui.same_line()
+            imgui.text_disabled("|")
+            imgui.same_line()
+            try:
+                imgui.text(f"Distance: {float(total_len):.2f} m")
+            except Exception:
+                imgui.text(f"Distance: {total_len}")
         path_goodness = status.get("path_goodness")
         quality_badge = _quality_badge(path_goodness)
         if quality_badge is not None:
@@ -504,6 +513,15 @@ class UI:
         if pos_err is not None:
             imgui.spacing()
             imgui.text(f"Avatar-robot position error: {pos_err:.3f} m")
+        total_len = status.get("total_flight_length_m")
+        if total_len is not None:
+            imgui.spacing()
+            try:
+                imgui.text(f"Total flight length: {float(total_len):.3f} m")
+            except Exception:
+                imgui.text(f"Total flight length: {total_len}")
+            if imgui.button("Reset distance"):
+                status.get("reset_flight_length", lambda: None)()
         if self._show_octomap:
             imgui.begin_child("OctoMap", (0, 220), True)
             imgui.text("OctoMap Raycast")
