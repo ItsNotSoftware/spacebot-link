@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from math import cos, pi, sin
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -57,6 +58,12 @@ from config import (
     ORIENT_PREVIEW_ENABLED,
     ORIENT_PREVIEW_EXTRA_YAW_DEG,
     ORIENT_PREVIEW_MODEL,
+    ORIENT_PREVIEW_MOTION_HINT_ENABLED,
+    ORIENT_PREVIEW_MOTION_HINT_FB_GAIN,
+    ORIENT_PREVIEW_MOTION_HINT_MAX_OFFSET_M,
+    ORIENT_PREVIEW_MOTION_HINT_REF_SPEED_MPS,
+    ORIENT_PREVIEW_MOTION_HINT_SMOOTHING,
+    ORIENT_PREVIEW_MOTION_HINT_SPEED_THRESH_MPS,
     ORIENT_PREVIEW_REGION,
     ORIENT_PREVIEW_TARGET_SIZE,
     PATH_ANIM_INSTANCES,
@@ -136,8 +143,11 @@ class Renderer:
         self._orient_scene: Optional[NodePath] = None
         self._orient_cam: Optional[NodePath] = None
         self._orient_preview: Optional[NodePath] = None
+        self._orient_preview_motion: Optional[NodePath] = None
         self._orient_enabled: bool = False
         self._orient_ros_axes_hpr = (90.0, 0.0, 0.0)  # ROS X->Panda Y, ROS Y->Panda -X
+        self._orient_motion_prev_pos: Optional[Tuple[float, float, float]] = None
+        self._orient_motion_prev_s: float = time.monotonic()
 
         # reasonable default intrinsics (updated once we see cam_info)
         self._init_default_lens()
@@ -315,12 +325,14 @@ class Renderer:
         preview_offset = preview_axes.attachNewNode("orientation_preview_offset")
         # Rotate preview frame to align pitch/roll axes with avatar controls.
         preview_offset.setHpr(90.0, 0.0, 0.0)
+        preview_motion = preview_offset.attachNewNode("orientation_preview_motion")
 
-        preview_pose = preview_offset.attachNewNode("orientation_preview_pose")
+        preview_pose = preview_motion.attachNewNode("orientation_preview_pose")
         container.copyTo(preview_pose)
         preview_pose.setColorScale(*ORIENT_PREVIEW_AVATAR_COLOR)
 
         self._orient_preview = preview_pose
+        self._orient_preview_motion = preview_motion
 
         cam_dist = float(ORIENT_PREVIEW_CAMERA_DISTANCE) * target
         cam_height = float(ORIENT_PREVIEW_CAMERA_HEIGHT) * target
@@ -424,6 +436,68 @@ class Renderer:
         fixed = Quat()
         fixed.setHpr((float(h), float(-p), float(-r)))
         self._orient_preview.setQuat(fixed)
+
+    def update_orientation_preview_motion_hint(
+        self,
+        avatar_pose: Optional[PoseTuple],
+    ) -> None:
+        """Shift preview slightly toward avatar motion direction (g-force style)."""
+        motion_np = self._orient_preview_motion
+        if not ORIENT_PREVIEW_MOTION_HINT_ENABLED or motion_np is None:
+            return
+        if avatar_pose is None:
+            motion_np.setPos(0.0, 0.0, 0.0)
+            self._orient_motion_prev_pos = None
+            self._orient_motion_prev_s = time.monotonic()
+            return
+
+        (x, y, z), (h, p, r) = avatar_pose
+        now_s = time.monotonic()
+        prev = self._orient_motion_prev_pos
+        dt = max(1e-3, float(now_s - self._orient_motion_prev_s))
+        self._orient_motion_prev_s = now_s
+        self._orient_motion_prev_pos = (float(x), float(y), float(z))
+        if prev is None:
+            motion_np.setPos(0.0, 0.0, 0.0)
+            return
+
+        dx = float(x) - prev[0]
+        dy = float(y) - prev[1]
+        dz = float(z) - prev[2]
+        speed = ((dx * dx + dy * dy + dz * dz) ** 0.5) / dt
+        if speed < float(ORIENT_PREVIEW_MOTION_HINT_SPEED_THRESH_MPS):
+            # Snap back when movement stops.
+            motion_np.setPos(0.0, 0.0, 0.0)
+            return
+
+        world_delta = Vec3(dx, dy, dz)
+        body_q = Quat()
+        body_q.setHpr((float(h), float(p), float(r)))
+        local_delta = body_q.conjugate().xform(world_delta)
+        # Preview frame uses a rotated alignment node; flip XY so motion hint
+        # direction matches perceived forward/back and left/right controls.
+        local_delta = Vec3(-local_delta.x, -local_delta.y, local_delta.z)
+        local_len = local_delta.length()
+        if local_len <= 1e-6:
+            motion_np.setPos(0.0, 0.0, 0.0)
+            return
+        local_delta /= local_len
+        ref_speed = max(1e-3, float(ORIENT_PREVIEW_MOTION_HINT_REF_SPEED_MPS))
+        amp = min(
+            float(ORIENT_PREVIEW_MOTION_HINT_MAX_OFFSET_M),
+            float(ORIENT_PREVIEW_MOTION_HINT_MAX_OFFSET_M) * (speed / ref_speed),
+        )
+        target = local_delta * amp
+        # Boost front/back hint only (avatar local +Y/-Y).
+        target = Vec3(
+            float(target.x),
+            float(target.y) * float(ORIENT_PREVIEW_MOTION_HINT_FB_GAIN),
+            float(target.z),
+        )
+        alpha = max(0.0, min(1.0, float(ORIENT_PREVIEW_MOTION_HINT_SMOOTHING)))
+        current = motion_np.getPos()
+        blended = (current * (1.0 - alpha)) + (target * alpha)
+        motion_np.setPos(blended)
 
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""

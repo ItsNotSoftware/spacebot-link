@@ -718,6 +718,7 @@ class SpacebotLinkApp(ShowBase):
         """Update the orientation preview models."""
         robot_ros_orientation = self.nav.state.last_ros_orientation
         avatar_pose = self.renderer.get_avatar_pose()
+        self.renderer.update_orientation_preview_motion_hint(avatar_pose)
         avatar_hpr = avatar_pose[1] if avatar_pose else None
         self.renderer.update_orientation_preview(robot_ros_orientation, avatar_hpr)
         return Task.cont
