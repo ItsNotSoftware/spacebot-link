@@ -216,7 +216,7 @@ class UI:
                 1.0,
             )
 
-            label = "ORIENTATION PREVIEW"
+            label = "MOTION PREVIEW"
             text_sz = imgui.calc_text_size(label)
             chip_w = max(154.0, text_sz.x + 24.0)
             chip_x0 = fx0 + 10.0
@@ -381,21 +381,13 @@ class UI:
             "Publish goals/paths", bool(status.get("nav_enabled", True))
         )
         imgui.same_line()
-        changed_move, move_robot = imgui.checkbox(
-            "Control robot (cmd_vel)", bool(status.get("move_robot", False))
+        changed_direct, direct_mode = imgui.checkbox(
+            "Direct mode", bool(status.get("direct_mode", False))
         )
-        imgui.same_line()
-        changed_floor, floor_on = imgui.checkbox(
-            "Floor projection", bool(status.get("floor_projection_enabled", True))
-        )
-        imgui.same_line()
-        _, self._advanced_debug = imgui.checkbox("Advanced debug", self._advanced_debug)
         if changed_nav:
             status.get("set_nav_enabled", lambda _v: None)(publish_nav)
-        if changed_move:
-            status.get("set_move_mode", lambda _v: None)(move_robot)
-        if changed_floor:
-            status.get("set_floor_projection_enabled", lambda _v: None)(floor_on)
+        if changed_direct:
+            status.get("set_direct_mode", lambda _v: None)(direct_mode)
 
         imgui.spacing()
         imgui.separator()
@@ -409,8 +401,6 @@ class UI:
         _, self._show_poses = imgui.checkbox("Poses", self._show_poses)
         imgui.same_line()
         _, self._show_octomap = imgui.checkbox("OctoMap", self._show_octomap)
-        if not self._advanced_debug:
-            self._show_octomap = False
         imgui.spacing()
         imgui.columns(2, "debug_columns", False)
         if self._show_nav:
@@ -604,7 +594,7 @@ class UI:
             imgui.columns(1)
 
             octomap_json = status.get("octomap_json")
-            if octomap_json and self._advanced_debug:
+            if octomap_json:
                 imgui.spacing()
                 _, self._show_octomap_raw = imgui.checkbox(
                     "Show raw JSON", self._show_octomap_raw
@@ -619,6 +609,8 @@ class UI:
         imgui.columns(1)
 
         imgui.end()
+        if bool(status.get("direct_mode", False)):
+            return
 
         # Top-right control window
         ctrl_w = 540.0

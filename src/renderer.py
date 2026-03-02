@@ -499,6 +499,19 @@ class Renderer:
         blended = (current * (1.0 - alpha)) + (target * alpha)
         motion_np.setPos(blended)
 
+    def set_orientation_preview_visible(self, visible: bool) -> None:
+        """Enable/disable orientation preview rendering."""
+        if self._orient_region is not None:
+            try:
+                self._orient_region.setActive(bool(visible))
+            except Exception:
+                pass
+        if self._orient_preview is not None:
+            if visible:
+                self._orient_preview.show()
+            else:
+                self._orient_preview.hide()
+
     def _init_floor_indicator(self) -> None:
         """Initialize the floor height shadow and line."""
         self._floor_shadow = self._make_floor_shadow()
