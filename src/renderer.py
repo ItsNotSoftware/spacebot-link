@@ -627,10 +627,20 @@ class Renderer:
         base_width = max(0.03, float(PATH_LINE_RIBBON_WIDTH_M))
         z_lift = float(PATH_LINE_RIBBON_LIFT_M)
         any_risk = any(v > 1e-6 for v in segment_risks)
+        prev_side: Optional[Vec3] = None
+
+        def _pose_neg_z_axis(hpr: Tuple[float, float, float]) -> Vec3:
+            q = Quat()
+            q.setHpr(Vec3(hpr[0], hpr[1], hpr[2]))
+            axis = q.xform(Vec3(0.0, 0.0, -1.0))
+            if axis.lengthSquared() <= 1e-8:
+                return Vec3(0.0, 0.0, -1.0)
+            axis.normalize()
+            return axis
 
         for idx in range(seg_count):
-            (x1, y1, z1), _ = line_poses[idx]
-            (x2, y2, z2), _ = line_poses[idx + 1]
+            (x1, y1, z1), hpr1 = line_poses[idx]
+            (x2, y2, z2), hpr2 = line_poses[idx + 1]
             p1 = Vec3(x1, y1, z1 + z_lift)
             p2 = Vec3(x2, y2, z2 + z_lift)
             tangent = p2 - p1
@@ -638,12 +648,29 @@ class Renderer:
             if seg_len <= 1e-6:
                 continue
             tangent /= seg_len
-            side = tangent.cross(Vec3(0.0, 0.0, 1.0))
+
+            n1 = _pose_neg_z_axis(hpr1)
+            n2 = _pose_neg_z_axis(hpr2)
+            plane_normal = n1 + n2
+            if plane_normal.lengthSquared() <= 1e-8:
+                plane_normal = Vec3(n1)
+            if plane_normal.lengthSquared() <= 1e-8:
+                plane_normal = Vec3(0.0, 0.0, -1.0)
+            plane_normal.normalize()
+
+            side = tangent.cross(plane_normal)
+            if side.lengthSquared() <= 1e-8:
+                side = tangent.cross(n1)
+            if side.lengthSquared() <= 1e-8:
+                side = tangent.cross(Vec3(0.0, 0.0, 1.0))
             if side.lengthSquared() <= 1e-8:
                 side = tangent.cross(Vec3(0.0, 1.0, 0.0))
             if side.lengthSquared() <= 1e-8:
                 continue
             side.normalize()
+            if prev_side is not None and side.dot(prev_side) < 0.0:
+                side *= -1.0
+            prev_side = Vec3(side)
 
             progress = (idx + 0.5) / max(1, seg_count)
             width = base_width * (1.0 - 0.30 * progress)
@@ -856,7 +883,7 @@ class Renderer:
         return out
 
     def _make_plane_proto(self) -> Optional[NodePath]:
-        """Build an outlined + translucent plane for pose visualization."""
+        """Build an outlined + translucent plane whose local normal is +Z."""
         w, h = PATH_PLANE_SIZE
         half_w = 0.5 * max(0.05, float(w))
         half_h = 0.5 * max(0.05, float(h))
@@ -864,11 +891,11 @@ class Renderer:
         outline = LineSegs("path_plane_outline")
         outline.setThickness(PATH_PLANE_THICKNESS)
         outline.setColor(*PATH_PLANE_OUTLINE_COLOR)
-        outline.moveTo(-half_w, 0.0, -half_h)
-        outline.drawTo(half_w, 0.0, -half_h)
-        outline.drawTo(half_w, 0.0, half_h)
-        outline.drawTo(-half_w, 0.0, half_h)
-        outline.drawTo(-half_w, 0.0, -half_h)
+        outline.moveTo(-half_w, -half_h, 0.0)
+        outline.drawTo(half_w, -half_h, 0.0)
+        outline.drawTo(half_w, half_h, 0.0)
+        outline.drawTo(-half_w, half_h, 0.0)
+        outline.drawTo(-half_w, -half_h, 0.0)
         outline_node = outline.create()
         if outline_node is None:
             return None
@@ -879,10 +906,23 @@ class Renderer:
         outline_np.setDepthWrite(False)
         outline_np.setDepthTest(False)
 
-        cm = CardMaker("path_plane_fill")
-        cm.setFrame(-half_w, half_w, -half_h, half_h)
-        fill_np = container.attachNewNode(cm.generate())
-        fill_np.setP(-90.0)  # rotate into the XZ plane so normal points forward (+Y)
+        # Build fill explicitly in XY so the plane normal is local +Z.
+        vdata = GeomVertexData(
+            "path_plane_fill_vdata", GeomVertexFormat.getV3(), Geom.UHStatic
+        )
+        vertex = GeomVertexWriter(vdata, "vertex")
+        vertex.addData3f(-half_w, -half_h, 0.0)
+        vertex.addData3f(half_w, -half_h, 0.0)
+        vertex.addData3f(half_w, half_h, 0.0)
+        vertex.addData3f(-half_w, half_h, 0.0)
+        tris = GeomTriangles(Geom.UHStatic)
+        tris.addVertices(0, 1, 2)
+        tris.addVertices(0, 2, 3)
+        geom = Geom(vdata)
+        geom.addPrimitive(tris)
+        gnode = GeomNode("path_plane_fill")
+        gnode.addGeom(geom)
+        fill_np = container.attachNewNode(gnode)
         fill_np.setTransparency(TransparencyAttrib.MAlpha)
         fill_np.setTwoSided(True)
         fill_np.setColor(
@@ -1258,11 +1298,9 @@ class Renderer:
             proto_plane = self._plane_proto
             if proto_plane is None:
                 return
-            marker_poses = self._resample_poses_by_distance(
-                poses,
-                start_offset_m=PATH_GHOST_START_OFFSET_M,
-                end_margin_m=PATH_GHOST_END_MARGIN_M,
-            )
+            # Use original trajectory poses so each plane orientation matches the
+            # exact pose-frame axes provided by the planner/path message.
+            marker_poses = poses
             last_idx = len(marker_poses) - 1
             for idx, (pos, hpr) in enumerate(marker_poses):
                 plane = proto_plane.copyTo(self.base.render)
