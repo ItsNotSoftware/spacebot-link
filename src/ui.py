@@ -138,6 +138,8 @@ class UI:
 
         def _draw_attitude_preview_frame() -> None:
             """Draw a subtle framed widget around the Panda3D attitude preview region."""
+            if bool(status.get("direct_mode", False)):
+                return
             if not ORIENT_PREVIEW_ENABLED:
                 return
             try:
