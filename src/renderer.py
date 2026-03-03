@@ -627,7 +627,9 @@ class Renderer:
         base_width = max(0.03, float(PATH_LINE_RIBBON_WIDTH_M))
         z_lift = float(PATH_LINE_RIBBON_LIFT_M)
         any_risk = any(v > 1e-6 for v in segment_risks)
-        prev_side: Optional[Vec3] = None
+        point_count = len(line_poses)
+        if point_count < 2:
+            return
 
         def _pose_neg_z_axis(hpr: Tuple[float, float, float]) -> Vec3:
             q = Quat()
@@ -638,57 +640,86 @@ class Renderer:
             axis.normalize()
             return axis
 
-        for idx in range(seg_count):
-            (x1, y1, z1), hpr1 = line_poses[idx]
-            (x2, y2, z2), hpr2 = line_poses[idx + 1]
-            p1 = Vec3(x1, y1, z1 + z_lift)
-            p2 = Vec3(x2, y2, z2 + z_lift)
-            tangent = p2 - p1
-            seg_len = tangent.length()
-            if seg_len <= 1e-6:
-                continue
-            tangent /= seg_len
+        points: List[Vec3] = []
+        normals: List[Vec3] = []
+        for (x, y, z), hpr in line_poses:
+            points.append(Vec3(x, y, z + z_lift))
+            normals.append(_pose_neg_z_axis(hpr))
 
-            n1 = _pose_neg_z_axis(hpr1)
-            n2 = _pose_neg_z_axis(hpr2)
-            plane_normal = n1 + n2
-            if plane_normal.lengthSquared() <= 1e-8:
-                plane_normal = Vec3(n1)
-            if plane_normal.lengthSquared() <= 1e-8:
-                plane_normal = Vec3(0.0, 0.0, -1.0)
-            plane_normal.normalize()
+        tangents: List[Vec3] = []
+        for idx in range(point_count):
+            if idx == 0:
+                t = points[1] - points[0]
+            elif idx == (point_count - 1):
+                t = points[-1] - points[-2]
+            else:
+                t_prev = points[idx] - points[idx - 1]
+                t_next = points[idx + 1] - points[idx]
+                t = Vec3(0.0, 0.0, 0.0)
+                if t_prev.lengthSquared() > 1e-8:
+                    t_prev.normalize()
+                    t += t_prev
+                if t_next.lengthSquared() > 1e-8:
+                    t_next.normalize()
+                    t += t_next
+                if t.lengthSquared() <= 1e-8:
+                    t = points[idx + 1] - points[idx - 1]
+            if t.lengthSquared() <= 1e-8:
+                t = tangents[-1] if tangents else Vec3(1.0, 0.0, 0.0)
+            else:
+                t.normalize()
+            tangents.append(t)
 
-            side = tangent.cross(plane_normal)
-            if side.lengthSquared() <= 1e-8:
-                side = tangent.cross(n1)
+        sides: List[Vec3] = []
+        widths: List[float] = []
+        prev_side: Optional[Vec3] = None
+        last_point_idx = max(1, point_count - 1)
+        for idx in range(point_count):
+            tangent = tangents[idx]
+            normal = normals[idx]
+            side = tangent.cross(normal)
+            if side.lengthSquared() <= 1e-8 and idx > 0:
+                side = tangent.cross(normals[idx - 1])
+            if side.lengthSquared() <= 1e-8 and idx + 1 < point_count:
+                side = tangent.cross(normals[idx + 1])
             if side.lengthSquared() <= 1e-8:
                 side = tangent.cross(Vec3(0.0, 0.0, 1.0))
             if side.lengthSquared() <= 1e-8:
                 side = tangent.cross(Vec3(0.0, 1.0, 0.0))
             if side.lengthSquared() <= 1e-8:
-                continue
-            side.normalize()
+                side = prev_side if prev_side is not None else Vec3(1.0, 0.0, 0.0)
+            else:
+                side.normalize()
             if prev_side is not None and side.dot(prev_side) < 0.0:
                 side *= -1.0
             prev_side = Vec3(side)
+            sides.append(side)
+            progress = idx / float(last_point_idx)
+            widths.append(base_width * (1.0 - 0.30 * progress))
 
-            progress = (idx + 0.5) / max(1, seg_count)
-            width = base_width * (1.0 - 0.30 * progress)
-            half_side = side * (0.5 * width)
+        for idx in range(seg_count):
+            p1 = points[idx]
+            p2 = points[idx + 1]
+            seg = p2 - p1
+            if seg.lengthSquared() <= 1e-8:
+                continue
+            half_side_1 = sides[idx] * (0.5 * widths[idx])
+            half_side_2 = sides[idx + 1] * (0.5 * widths[idx + 1])
+            seg_progress = (idx + 0.5) / max(1, seg_count)
 
             if any_risk:
                 rr, gg, bb, _ = _risk_to_color(segment_risks[idx])
             else:
                 rr, gg, bb = r, g, b
-            brightness = 1.0 - 0.10 * progress
+            brightness = 1.0 - 0.10 * seg_progress
             alpha = max(0.24, min(1.0, float(PATH_LINE_RIBBON_ALPHA) * a))
             rgba = (rr * brightness, gg * brightness, bb * brightness, alpha)
 
             i0 = vtx.getWriteRow()
-            p1l = p1 - half_side
-            p1r = p1 + half_side
-            p2r = p2 + half_side
-            p2l = p2 - half_side
+            p1l = p1 - half_side_1
+            p1r = p1 + half_side_1
+            p2r = p2 + half_side_2
+            p2l = p2 - half_side_2
             for p in (p1l, p1r, p2r, p2l):
                 vtx.addData3f(p)
                 col.addData4f(*rgba)
@@ -1307,7 +1338,7 @@ class Renderer:
                 plane.setPos(self.base.render, pos[0], pos[1], pos[2])
                 plane.setHpr(self.base.render, hpr[0], hpr[1], hpr[2])
                 t = (idx / float(last_idx)) if last_idx > 0 else 0.0
-                fade = max(0.08, 0.65 * (1.0 - 0.7 * t))
+                fade = max(0.06, 0.52 * (1.0 - 0.7 * t))
                 plane.setColorScale(1.0, 1.0, 1.0, fade)
                 self._path_markers.append(plane)
             return
