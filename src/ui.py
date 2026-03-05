@@ -58,12 +58,14 @@ class UI:
         self._iss_map_texture: Optional[Texture] = None
         self._iss_map_tex_id: Optional[int] = None
         self._show_iss_map_window: bool = True
-        self._show_nav: bool = True
-        self._show_pathviz: bool = True
-        self._show_poses: bool = True
-        self._show_octomap: bool = True
-        self._show_octomap_raw: bool = False
         self._advanced_debug: bool = False
+        self._iss_map_offset_x_m: float = float(ISS_MAP_ROBOT_OFFSET_XY_M[0])
+        self._iss_map_offset_y_m: float = float(ISS_MAP_ROBOT_OFFSET_XY_M[1])
+        self._iss_map_scale_x_px_per_m: float = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[0])
+        self._iss_map_scale_y_px_per_m: float = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[1])
+        self._iss_map_yaw_offset_deg: float = float(ISS_MAP_YAW_OFFSET_DEG)
+        self._iss_map_marker_radius_px: float = float(ISS_MAP_MARKER_RADIUS_PX)
+        self._iss_map_heading_len_px: float = float(ISS_MAP_HEADING_LEN_PX)
 
         self._init_imgui()
 
@@ -288,28 +290,22 @@ class UI:
                     (1.0, 0.0),
                 )
 
-                robot_pose = status.get("robot_ros_pose")
-                if isinstance(robot_pose, (tuple, list)) and len(robot_pose) >= 2:
+                avatar_pose = status.get("avatar_ros_pose")
+                if isinstance(avatar_pose, (tuple, list)) and len(avatar_pose) >= 2:
                     try:
-                        pos = robot_pose[0]
-                        rpy = robot_pose[1]
+                        pos = avatar_pose[0]
+                        rpy = avatar_pose[1]
                         rx_m = float(pos[0])
                         ry_m = float(pos[1])
                         yaw_deg = float(rpy[2])
                     except Exception:
                         rx_m = ry_m = yaw_deg = None
                     if rx_m is not None and ry_m is not None and yaw_deg is not None:
-                        try:
-                            off_x_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[0])
-                            off_y_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[1])
-                        except Exception:
-                            off_x_m, off_y_m = 0.0, 0.0
-                        try:
-                            sx = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[0]) * scale
-                            sy = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[1]) * scale
-                        except Exception:
-                            sx = sy = 20.0 * scale
-                        yaw_rad = math.radians(yaw_deg + float(ISS_MAP_YAW_OFFSET_DEG))
+                        off_x_m = self._iss_map_offset_x_m
+                        off_y_m = self._iss_map_offset_y_m
+                        sx = self._iss_map_scale_x_px_per_m * scale
+                        sy = self._iss_map_scale_y_px_per_m * scale
+                        yaw_rad = math.radians(yaw_deg + self._iss_map_yaw_offset_deg)
                         marker_x = image_pos.x + draw_w * 0.5 + (rx_m - off_x_m) * sx
                         marker_y = image_pos.y + draw_h * 0.5 - (ry_m - off_y_m) * sy
                         marker_x = max(image_pos.x, min(image_pos.x + draw_w, marker_x))
@@ -317,8 +313,8 @@ class UI:
 
                         draw = imgui.get_window_draw_list()
                         if draw is not None:
-                            r = max(2.0, float(ISS_MAP_MARKER_RADIUS_PX))
-                            heading_len = max(8.0, float(ISS_MAP_HEADING_LEN_PX))
+                            r = max(2.0, self._iss_map_marker_radius_px)
+                            heading_len = max(8.0, self._iss_map_heading_len_px)
                             tip_x = marker_x + math.cos(yaw_rad) * heading_len
                             tip_y = marker_y - math.sin(yaw_rad) * heading_len
                             side = max(4.0, r * 1.4)
@@ -507,135 +503,162 @@ class UI:
 
         imgui.spacing()
         imgui.separator()
-        imgui.text("Widget visibility")
-        imgui.text("Show sections")
-        imgui.same_line()
-        _, self._show_nav = imgui.checkbox("Nav", self._show_nav)
-        imgui.same_line()
-        _, self._show_pathviz = imgui.checkbox("PathViz", self._show_pathviz)
-        imgui.same_line()
-        _, self._show_poses = imgui.checkbox("Poses", self._show_poses)
-        imgui.same_line()
-        _, self._show_octomap = imgui.checkbox("OctoMap", self._show_octomap)
-        imgui.spacing()
         imgui.columns(2, "debug_columns", False)
-        if self._show_nav:
-            imgui.begin_child("Nav", (0, 170), True)
-            if status.get("mode") == "Goal Mode":
-                imgui.text("Goal")
-                ros_goal = status.get("last_goal_ros")
-                if ros_goal is not None:
-                    (gx, gy, gz), (gh, gp, gr) = ros_goal
-                    imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                    imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
-                else:
-                    last_goal = status.get("last_goal_panda")
-                    if last_goal is not None:
-                        (gx, gy, gz), (gh, gp, gr) = last_goal
-                        imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
-                        imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
-                    else:
-                        imgui.text("  waiting for goal")
-                imgui.text(f"  path poses: {status.get('path_pose_count', 0)}")
+        imgui.begin_child("NavSummary", (0, 170), True)
+        if status.get("mode") == "Goal Mode":
+            imgui.text("Goal")
+            ros_goal = status.get("last_goal_ros")
+            if ros_goal is not None:
+                (gx, gy, gz), (gh, gp, gr) = ros_goal
+                imgui.text(f"  pos (m, ROS): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                imgui.text(f"  rpy (deg, ROS): {gh:.1f}, {gp:.1f}, {gr:.1f}")
             else:
-                imgui.text("Follow path")
-                imgui.text(f"  buffered poses: {status.get('waypoint_count', 0)}")
-                tip = status.get("follow_tip")
-                if tip is not None:
-                    fx, fy, fz = tip
-                    imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
-            q = status.get("path_goodness")
-            if q is not None:
-                try:
-                    qf = float(q)
-                    badge = _quality_badge(qf)
-                    label = badge[1] if badge is not None else "?"
-                    imgui.text(f"  path_goodness (MC): {qf:.3f} [{label}]")
-                except Exception:
-                    imgui.text(f"  path_goodness (MC): {q}")
-            imgui.end_child()
+                last_goal = status.get("last_goal_panda")
+                if last_goal is not None:
+                    (gx, gy, gz), (gh, gp, gr) = last_goal
+                    imgui.text(f"  pos (m): {gx:.2f}, {gy:.2f}, {gz:.2f}")
+                    imgui.text(f"  hpr (deg): {gh:.1f}, {gp:.1f}, {gr:.1f}")
+                else:
+                    imgui.text("  waiting for goal")
+            imgui.text(f"  path poses: {status.get('path_pose_count', 0)}")
+        else:
+            imgui.text("Follow path")
+            imgui.text(f"  buffered poses: {status.get('waypoint_count', 0)}")
+            tip = status.get("follow_tip")
+            if tip is not None:
+                fx, fy, fz = tip
+                imgui.text(f"  tip (m): {fx:.2f}, {fy:.2f}, {fz:.2f}")
+        q = status.get("path_goodness")
+        if q is not None:
+            try:
+                qf = float(q)
+                badge = _quality_badge(qf)
+                label = badge[1] if badge is not None else "?"
+                imgui.text(f"  path_goodness (MC): {qf:.3f} [{label}]")
+            except Exception:
+                imgui.text(f"  path_goodness (MC): {q}")
+        imgui.end_child()
 
         imgui.spacing()
-        if self._show_pathviz:
-            imgui.begin_child("PathViz", (0, 220), True)
-            imgui.text("Path visualization")
-            modes = ["poses", "poses_line", "planes", "animated"]
-            current_mode = status.get("path_mode", modes[0])
-            try:
-                idx = modes.index(current_mode)
-            except ValueError:
-                idx = 0
-            changed_mode, new_idx = imgui.combo("Mode", idx, modes)
-            if changed_mode:
-                status.get("set_path_mode", lambda _m: None)(modes[new_idx])
-
-            selected_mode = modes[new_idx]
-            if selected_mode in ("poses", "poses_line", "planes"):
-                marker_spacing = float(status.get("marker_spacing_m", 0.40))
-                imgui.text("Projection spacing (m)")
-                imgui.set_next_item_width(140)
-                changed, marker_spacing = imgui.input_float(
-                    "##marker_spacing_m", marker_spacing, step=0.05
-                )
-                if changed:
-                    status.get("set_marker_spacing", lambda _v: None)(
-                        max(0.05, marker_spacing)
-                    )
-            else:
-                anim_speed = float(status.get("anim_speed", 1.0))
-                imgui.text("Anim speed (m/s)")
-                imgui.set_next_item_width(140)
-                changed, anim_speed = imgui.input_float(
-                    "##anim_speed", anim_speed, step=0.0
-                )
-                if changed:
-                    status.get("set_anim_speed", lambda _v: None)(max(0.01, anim_speed))
-                anim_instances = int(status.get("anim_instances", 1))
-                imgui.text("Ghost instances")
-                imgui.set_next_item_width(140)
-                changed_count, anim_instances = imgui.input_int(
-                    "##anim_instances", anim_instances
-                )
-                if changed_count:
-                    status.get("set_anim_instances", lambda _v: None)(
-                        max(1, anim_instances)
-                    )
-                anim_line_enabled = bool(status.get("anim_line_enabled", True))
-                changed_line, anim_line_enabled = imgui.checkbox(
-                    "Show path line", anim_line_enabled
-                )
-                if changed_line:
-                    status.get("set_anim_line_enabled", lambda _v: None)(
-                        anim_line_enabled
-                    )
-            imgui.end_child()
+        imgui.begin_child("MapCalibration", (0, 260), True)
+        imgui.text("ISS map calibration")
+        imgui.separator()
+        imgui.text_disabled("Robot marker transform")
+        imgui.text(
+            "offset_xy_m=(%.3f, %.3f)  scale_px_per_m=(%.3f, %.3f)"
+            % (
+                self._iss_map_offset_x_m,
+                self._iss_map_offset_y_m,
+                self._iss_map_scale_x_px_per_m,
+                self._iss_map_scale_y_px_per_m,
+            )
+        )
+        imgui.text(
+            "yaw_offset_deg=%.3f  marker_radius_px=%.3f  heading_len_px=%.3f"
+            % (
+                self._iss_map_yaw_offset_deg,
+                self._iss_map_marker_radius_px,
+                self._iss_map_heading_len_px,
+            )
+        )
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_offset_x_m = imgui.input_float(
+            "Offset X (m)", self._iss_map_offset_x_m, step=0.1, format="%.3f"
+        )
+        if changed:
+            self._iss_map_offset_x_m = float(self._iss_map_offset_x_m)
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_offset_y_m = imgui.input_float(
+            "Offset Y (m)", self._iss_map_offset_y_m, step=0.1, format="%.3f"
+        )
+        if changed:
+            self._iss_map_offset_y_m = float(self._iss_map_offset_y_m)
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_scale_x_px_per_m = imgui.input_float(
+            "Scale X (px/m)",
+            self._iss_map_scale_x_px_per_m,
+            step=0.1,
+            format="%.3f",
+        )
+        if changed:
+            self._iss_map_scale_x_px_per_m = max(
+                0.01, float(self._iss_map_scale_x_px_per_m)
+            )
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_scale_y_px_per_m = imgui.input_float(
+            "Scale Y (px/m)",
+            self._iss_map_scale_y_px_per_m,
+            step=0.1,
+            format="%.3f",
+        )
+        if changed:
+            self._iss_map_scale_y_px_per_m = max(
+                0.01, float(self._iss_map_scale_y_px_per_m)
+            )
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_yaw_offset_deg = imgui.input_float(
+            "Yaw offset (deg)",
+            self._iss_map_yaw_offset_deg,
+            step=0.5,
+            format="%.3f",
+        )
+        if changed:
+            self._iss_map_yaw_offset_deg = float(self._iss_map_yaw_offset_deg)
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_marker_radius_px = imgui.input_float(
+            "Marker radius (px)",
+            self._iss_map_marker_radius_px,
+            step=0.5,
+            format="%.3f",
+        )
+        if changed:
+            self._iss_map_marker_radius_px = max(
+                2.0, float(self._iss_map_marker_radius_px)
+            )
+        imgui.set_next_item_width(220.0)
+        changed, self._iss_map_heading_len_px = imgui.input_float(
+            "Heading len (px)",
+            self._iss_map_heading_len_px,
+            step=1.0,
+            format="%.3f",
+        )
+        if changed:
+            self._iss_map_heading_len_px = max(8.0, float(self._iss_map_heading_len_px))
+        if imgui.button("Reset map defaults"):
+            self._iss_map_offset_x_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[0])
+            self._iss_map_offset_y_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[1])
+            self._iss_map_scale_x_px_per_m = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[0])
+            self._iss_map_scale_y_px_per_m = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[1])
+            self._iss_map_yaw_offset_deg = float(ISS_MAP_YAW_OFFSET_DEG)
+            self._iss_map_marker_radius_px = float(ISS_MAP_MARKER_RADIUS_PX)
+            self._iss_map_heading_len_px = float(ISS_MAP_HEADING_LEN_PX)
+        imgui.end_child()
 
         imgui.next_column()
-        if self._show_poses:
-            imgui.begin_child("Poses", (0, 170), True)
-            imgui.columns(2, "pose_columns", False)
-            imgui.text("Avatar pose (ROS frame)")
-            av_ros_tuple = status.get("avatar_ros_pose")
-            if av_ros_tuple is not None:
-                (ax, ay, az), (ar, ap, ayaw) = av_ros_tuple
-                imgui.text(f"  pos (m): {ax:.2f}, {ay:.2f}, {az:.2f}")
-                imgui.text(f"  rpy (deg): {ar:.1f}, {ap:.1f}, {ayaw:.1f}")
-            else:
-                imgui.text("  waiting for pose")
+        imgui.begin_child("Poses", (0, 170), True)
+        imgui.columns(2, "pose_columns", False)
+        imgui.text("Avatar pose (ROS frame)")
+        av_ros_tuple = status.get("avatar_ros_pose")
+        if av_ros_tuple is not None:
+            (ax, ay, az), (ar, ap, ayaw) = av_ros_tuple
+            imgui.text(f"  pos (m): {ax:.2f}, {ay:.2f}, {az:.2f}")
+            imgui.text(f"  rpy (deg): {ar:.1f}, {ap:.1f}, {ayaw:.1f}")
+        else:
+            imgui.text("  waiting for pose")
 
-            imgui.next_column()
-            imgui.text("Robot pose (ROS frame)")
-            robot_pose = status.get("robot_ros_pose")
-            if robot_pose is not None:
-                (x, y, z), rpy = robot_pose
-                imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
-                if rpy is not None:
-                    roll, pitch, yaw = rpy
-                    imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
-            else:
-                imgui.text("  waiting for /space_cobot/pose")
-            imgui.columns(1)
-            imgui.end_child()
+        imgui.next_column()
+        imgui.text("Robot pose (ROS frame)")
+        robot_pose = status.get("robot_ros_pose")
+        if robot_pose is not None:
+            (x, y, z), rpy = robot_pose
+            imgui.text(f"  pos (m): {x:.2f}, {y:.2f}, {z:.2f}")
+            if rpy is not None:
+                roll, pitch, yaw = rpy
+                imgui.text(f"  rpy (deg): {roll:.1f}, {pitch:.1f}, {yaw:.1f}")
+        else:
+            imgui.text("  waiting for /space_cobot/pose")
+        imgui.columns(1)
+        imgui.end_child()
 
         pos_err = status.get("avatar_robot_error")
         if pos_err is not None:
@@ -656,72 +679,6 @@ class UI:
             imgui.spacing()
             if imgui.button("Reset"):
                 status.get("reset_session_metrics", lambda: None)()
-        if self._show_octomap:
-            imgui.begin_child("OctoMap", (0, 220), True)
-            imgui.text("OctoMap Raycast")
-            imgui.separator()
-
-            occluded_display = _parse_bool_flag(status.get("octomap_occluded"))
-            if occluded_display is None:
-                imgui.text("avatar_occluded=unknown")
-            else:
-                occ_color = (
-                    (1.0, 0.6, 0.2, 1.0) if occluded_display else (0.7, 1.0, 0.7, 1.0)
-                )
-                imgui.text_colored(
-                    occ_color,
-                    f"avatar_occluded={str(occluded_display).lower()}",
-                )
-
-            in_obstacle_display = _parse_bool_flag(status.get("octomap_in_obstacle"))
-            if in_obstacle_display is None:
-                imgui.text("avatar_in_obstacle=unknown")
-            else:
-                inside_color = (
-                    (1.0, 0.35, 0.35, 1.0)
-                    if in_obstacle_display
-                    else (0.7, 1.0, 0.7, 1.0)
-                )
-                imgui.text_colored(
-                    inside_color,
-                    f"avatar_in_obstacle={str(in_obstacle_display).lower()}",
-                )
-
-            imgui.spacing()
-            imgui.columns(2, "octo_kv", False)
-
-            ground_axis = status.get("octomap_ground_axis")
-            ground_distance = status.get("octomap_ground_distance")
-            imgui.text("ground_axis")
-            imgui.next_column()
-            imgui.text("unknown" if ground_axis is None else f"{ground_axis}")
-            imgui.next_column()
-
-            imgui.text("ground_distance_m")
-            imgui.next_column()
-            if ground_distance is None:
-                imgui.text("unknown")
-            else:
-                try:
-                    dist_val = float(ground_distance)
-                    imgui.text(f"{dist_val:.2f}")
-                except Exception:
-                    imgui.text(str(ground_distance))
-            imgui.columns(1)
-
-            octomap_json = status.get("octomap_json")
-            if octomap_json:
-                imgui.spacing()
-                _, self._show_octomap_raw = imgui.checkbox(
-                    "Show raw JSON", self._show_octomap_raw
-                )
-                if self._show_octomap_raw:
-                    imgui.spacing()
-                    imgui.begin_child("octomap_json", (0, 90), True)
-                    imgui.text_wrapped(octomap_json)
-                    imgui.end_child()
-            imgui.end_child()
-
         imgui.columns(1)
 
         imgui.end()
