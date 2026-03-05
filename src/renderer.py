@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from math import cos, pi, sin
 from pathlib import Path
@@ -95,6 +96,8 @@ from utils import (
     panda_pose_to_ros,
     ros_orientation_to_panda_hpr,
     ros_orientation_to_panda_quat,
+    ros_vector_to_panda,
+    rotate_vector_by_quaternion,
 )
 
 PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
@@ -326,12 +329,13 @@ class Renderer:
         preview_anchor = scene.attachNewNode("orientation_preview_anchor")
         preview_axes = preview_anchor.attachNewNode("orientation_preview_axes")
         preview_axes.setHpr(*self._orient_ros_axes_hpr)
-        self._attach_orientation_axis_guide(preview_axes, target)
 
         preview_offset = preview_axes.attachNewNode("orientation_preview_offset")
         # Rotate preview frame to align pitch/roll axes with avatar controls.
         preview_offset.setHpr(90.0, 0.0, 0.0)
         preview_motion = preview_offset.attachNewNode("orientation_preview_motion")
+        # Attach UP helper in the same frame chain used by the previewed avatar.
+        self._attach_orientation_axis_guide(preview_motion, target)
 
         preview_pose = preview_motion.attachNewNode("orientation_preview_pose")
         container.copyTo(preview_pose)
@@ -371,33 +375,15 @@ class Renderer:
         root = parent.attachNewNode("orientation_world_axes")
         self._orient_world_axes = root
 
-        axes = (
-            (
-                "MAP +X",
-                Vec3(axis_len, 0.0, 0.0),
-                Vec3(0.08, 0.06, 0.02),
-                (0.95, 0.28, 0.22, 1.0),
-            ),
-            (
-                "MAP +Y",
-                Vec3(0.0, axis_len, 0.0),
-                Vec3(-0.14, 0.06, 0.03),
-                (0.20, 0.86, 0.40, 1.0),
-            ),
-            (
-                "MAP +Z",
-                Vec3(0.0, 0.0, axis_len),
-                Vec3(0.06, 0.02, 0.10),
-                (0.25, 0.70, 1.0, 1.0),
-            ),
-        )
+        # Strong single-axis helper: clear UP arrow + base plane cue.
+        tip = Vec3(0.0, 0.0, axis_len)
+        up_color = (0.94, 0.16, 0.16, 1.0)
 
         glow = LineSegs("orientation_axis_guide_glow")
         glow.setThickness(glow_thickness)
-        for _label, tip, _offset, _color in axes:
-            glow.setColor(0.0, 0.0, 0.0, 0.38)
-            glow.moveTo(0.0, 0.0, 0.0)
-            glow.drawTo(tip)
+        glow.setColor(0.0, 0.0, 0.0, 0.42)
+        glow.moveTo(0.0, 0.0, 0.0)
+        glow.drawTo(tip)
         glow_node = glow.create()
         if glow_node is not None:
             glow_np = root.attachNewNode(glow_node)
@@ -407,27 +393,21 @@ class Renderer:
 
         lines = LineSegs("orientation_axis_guide")
         lines.setThickness(axis_thickness)
-        arrow_len = axis_len * 0.14
+        arrow_len = axis_len * 0.18
         wing = arrow_len * 0.55
-        for _label, tip, _offset, color in axes:
-            lines.setColor(*color)
-            lines.moveTo(0.0, 0.0, 0.0)
-            lines.drawTo(tip)
-            if abs(tip.x) > 1e-6:
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(tip.x - arrow_len, +wing, 0.0))
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(tip.x - arrow_len, -wing, 0.0))
-            elif abs(tip.y) > 1e-6:
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(+wing, tip.y - arrow_len, 0.0))
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(-wing, tip.y - arrow_len, 0.0))
-            else:
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(+wing, 0.0, tip.z - arrow_len))
-                lines.moveTo(tip)
-                lines.drawTo(Vec3(-wing, 0.0, tip.z - arrow_len))
+        z_back = tip.z - arrow_len
+        lines.setColor(*up_color)
+        lines.moveTo(0.0, 0.0, 0.0)
+        lines.drawTo(tip)
+        # Four fins make the arrow readable from more camera angles.
+        lines.moveTo(tip)
+        lines.drawTo(Vec3(+wing, 0.0, z_back))
+        lines.moveTo(tip)
+        lines.drawTo(Vec3(-wing, 0.0, z_back))
+        lines.moveTo(tip)
+        lines.drawTo(Vec3(0.0, +wing, z_back))
+        lines.moveTo(tip)
+        lines.drawTo(Vec3(0.0, -wing, z_back))
         node = lines.create()
         if node is not None:
             lines_np = root.attachNewNode(node)
@@ -435,14 +415,34 @@ class Renderer:
             lines_np.setDepthWrite(False)
             lines_np.setDepthTest(False)
 
+        base = LineSegs("orientation_axis_base_plane")
+        base.setThickness(max(1.0, axis_thickness - 1.0))
+        base.setColor(0.95, 0.95, 0.95, 0.65)
+        ring_r = axis_len * 0.26
+        ring_steps = 20
+        prev = Vec3(ring_r, 0.0, 0.0)
+        for i in range(1, ring_steps + 1):
+            a = (float(i) / float(ring_steps)) * (2.0 * math.pi)
+            cur = Vec3(math.cos(a) * ring_r, math.sin(a) * ring_r, 0.0)
+            base.moveTo(prev)
+            base.drawTo(cur)
+            prev = cur
+        cross = ring_r * 0.75
+        base.moveTo(-cross, 0.0, 0.0)
+        base.drawTo(+cross, 0.0, 0.0)
+        base.moveTo(0.0, -cross, 0.0)
+        base.drawTo(0.0, +cross, 0.0)
+        base_node = base.create()
+        if base_node is not None:
+            base_np = root.attachNewNode(base_node)
+            base_np.setBin("fixed", 11)
+            base_np.setDepthWrite(False)
+            base_np.setDepthTest(False)
+
         hub = LineSegs("orientation_axis_hub")
         hub.setThickness(axis_thickness + 1.0)
-        hub.setColor(0.98, 0.98, 1.0, 0.95)
+        hub.setColor(1.0, 1.0, 1.0, 0.95)
         s = axis_len * 0.04
-        hub.moveTo(-s, 0.0, 0.0)
-        hub.drawTo(+s, 0.0, 0.0)
-        hub.moveTo(0.0, -s, 0.0)
-        hub.drawTo(0.0, +s, 0.0)
         hub.moveTo(0.0, 0.0, -s)
         hub.drawTo(0.0, 0.0, +s)
         hub_node = hub.create()
@@ -452,21 +452,20 @@ class Renderer:
             hub_np.setDepthWrite(False)
             hub_np.setDepthTest(False)
 
-        for idx, (label, tip, offset, color) in enumerate(axes):
-            text = TextNode(f"orient_axis_{idx}")
-            text.setText(label)
-            text.setTextColor(*color)
-            text.setAlign(TextNode.A_center)
-            text.setCardColor(0.02, 0.03, 0.05, 0.75)
-            text.setCardAsMargin(0.20, 0.20, 0.12, 0.12)
-            text_np = root.attachNewNode(text)
-            text_np.setScale(label_scale)
-            text_np.setPos(tip + (offset * axis_len))
-            text_np.setBillboardPointEye()
-            text_np.setTwoSided(True)
-            text_np.setBin("fixed", 13)
-            text_np.setDepthWrite(False)
-            text_np.setDepthTest(False)
+        text = TextNode("orient_axis_up")
+        text.setText("UP")
+        text.setTextColor(*up_color)
+        text.setAlign(TextNode.A_center)
+        text.setCardColor(0.02, 0.03, 0.05, 0.82)
+        text.setCardAsMargin(0.22, 0.22, 0.12, 0.12)
+        text_np = root.attachNewNode(text)
+        text_np.setScale(label_scale * 1.05)
+        text_np.setPos(tip + Vec3(0.08 * axis_len, 0.0, 0.10 * axis_len))
+        text_np.setBillboardPointEye()
+        text_np.setTwoSided(True)
+        text_np.setBin("fixed", 13)
+        text_np.setDepthWrite(False)
+        text_np.setDepthTest(False)
 
     def update_orientation_preview(
         self,
@@ -484,6 +483,42 @@ class Renderer:
         axes_quat = Quat()
         axes_quat.setHpr(self._orient_ros_axes_hpr)
         axes_inv = axes_quat.conjugate()
+
+        def _to_preview_quat(desired: Quat) -> Quat:
+            """Map robot-frame Panda quat into the displayed preview frame."""
+            rel = axes_inv * desired
+            h, p, r = rel.getHpr()
+            fixed_local = Quat()
+            fixed_local.setHpr((float(h), float(-p), float(-r)))
+            return fixed_local
+
+        def _quat_from_to(frm: Vec3, to: Vec3) -> Optional[Quat]:
+            """Return shortest-arc quaternion rotating frm onto to."""
+            a = Vec3(frm)
+            b = Vec3(to)
+            if a.lengthSquared() <= 1e-12 or b.lengthSquared() <= 1e-12:
+                return None
+            a.normalize()
+            b.normalize()
+            d = max(-1.0, min(1.0, float(a.dot(b))))
+            if d > 0.999999:
+                q = Quat()
+                q.identQuat()
+                return q
+            if d < -0.999999:
+                axis = a.cross(Vec3(1.0, 0.0, 0.0))
+                if axis.lengthSquared() <= 1e-8:
+                    axis = a.cross(Vec3(0.0, 1.0, 0.0))
+                axis.normalize()
+                q = Quat()
+                q.setFromAxisAngle(180.0, axis)
+                return q
+            c = a.cross(b)
+            q = Quat()
+            q.set(1.0 + d, c.x, c.y, c.z)
+            q.normalize()
+            return q
+
         if robot_ros_orientation is None or avatar_hpr is None:
             self._orient_preview.hide()
             return
@@ -532,20 +567,24 @@ class Renderer:
             if robot_q is None:
                 world_axes.hide()
             else:
-                world_q = _quat_conjugate(robot_q)
-                world_quat = ros_orientation_to_panda_quat(
+                robot_conj = _quat_conjugate(robot_q)
+                up_ros = rotate_vector_by_quaternion(
+                    (0.0, 0.0, 1.0),
                     {
-                        "x": world_q[1],
-                        "y": world_q[2],
-                        "z": world_q[3],
-                        "w": world_q[0],
-                    }
+                        "x": robot_conj[1],
+                        "y": robot_conj[2],
+                        "z": robot_conj[3],
+                        "w": robot_conj[0],
+                    },
                 )
-                if world_quat is None:
+                up_p = ros_vector_to_panda(up_ros)
+                up_vec = Vec3(float(up_p[0]), float(up_p[1]), float(up_p[2]))
+                up_quat = _quat_from_to(Vec3(0.0, 0.0, 1.0), up_vec)
+                if up_quat is None:
                     world_axes.hide()
                 else:
                     world_axes.show()
-                    world_axes.setQuat(axes_inv * world_quat)
+                    world_axes.setQuat(_to_preview_quat(up_quat))
 
         avatar_q = _quat_from_ros(avatar_ori)
         if robot_q is None or avatar_q is None:
@@ -564,13 +603,8 @@ class Renderer:
         if rel_quat is None:
             self._orient_preview.hide()
             return
-        desired = rel_quat
         self._orient_preview.show()
-        rel = axes_inv * desired
-        h, p, r = rel.getHpr()
-        fixed = Quat()
-        fixed.setHpr((float(h), float(-p), float(-r)))
-        self._orient_preview.setQuat(fixed)
+        self._orient_preview.setQuat(_to_preview_quat(rel_quat))
 
     def update_orientation_preview_motion_hint(
         self,

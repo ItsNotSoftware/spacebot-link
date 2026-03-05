@@ -9,6 +9,7 @@ REMOTE_INPUT_DAEMON = "spacemouse"
 
 # Window / rendering
 WINDOW_TITLE = "SpaceBotLink"
+WINDOW_SIZE_PX = (1920, 1200)
 FRAMEBUFFER_SRGB_CFG = "framebuffer-srgb true"
 TRANSPARENCY_SORT_CFG = "transparency-sort off"
 
