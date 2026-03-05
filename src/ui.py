@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -11,6 +12,11 @@ from imgui_bundle import imgui
 from panda3d.core import PerspectiveLens, Texture
 
 from config import (
+    ISS_MAP_HEADING_LEN_PX,
+    ISS_MAP_MARKER_RADIUS_PX,
+    ISS_MAP_ROBOT_OFFSET_XY_M,
+    ISS_MAP_ROBOT_SCALE_PX_PER_M,
+    ISS_MAP_YAW_OFFSET_DEG,
     ORIENT_PREVIEW_CROP_TOP,
     ORIENT_PREVIEW_ENABLED,
     ORIENT_PREVIEW_REGION,
@@ -274,12 +280,71 @@ class UI:
                     scale = 1.0
                 draw_w = max(1.0, float(tex_w) * scale)
                 draw_h = max(1.0, float(tex_h) * scale)
+                image_pos = imgui.get_cursor_screen_pos()
                 imgui.image(
                     imgui.ImTextureRef(int(self._iss_map_tex_id)),
                     (draw_w, draw_h),
                     (0.0, 1.0),
                     (1.0, 0.0),
                 )
+
+                robot_pose = status.get("robot_ros_pose")
+                if isinstance(robot_pose, (tuple, list)) and len(robot_pose) >= 2:
+                    try:
+                        pos = robot_pose[0]
+                        rpy = robot_pose[1]
+                        rx_m = float(pos[0])
+                        ry_m = float(pos[1])
+                        yaw_deg = float(rpy[2])
+                    except Exception:
+                        rx_m = ry_m = yaw_deg = None
+                    if rx_m is not None and ry_m is not None and yaw_deg is not None:
+                        try:
+                            off_x_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[0])
+                            off_y_m = float(ISS_MAP_ROBOT_OFFSET_XY_M[1])
+                        except Exception:
+                            off_x_m, off_y_m = 0.0, 0.0
+                        try:
+                            sx = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[0]) * scale
+                            sy = float(ISS_MAP_ROBOT_SCALE_PX_PER_M[1]) * scale
+                        except Exception:
+                            sx = sy = 20.0 * scale
+                        yaw_rad = math.radians(yaw_deg + float(ISS_MAP_YAW_OFFSET_DEG))
+                        marker_x = image_pos.x + draw_w * 0.5 + (rx_m - off_x_m) * sx
+                        marker_y = image_pos.y + draw_h * 0.5 - (ry_m - off_y_m) * sy
+                        marker_x = max(image_pos.x, min(image_pos.x + draw_w, marker_x))
+                        marker_y = max(image_pos.y, min(image_pos.y + draw_h, marker_y))
+
+                        draw = imgui.get_window_draw_list()
+                        if draw is not None:
+                            r = max(2.0, float(ISS_MAP_MARKER_RADIUS_PX))
+                            heading_len = max(8.0, float(ISS_MAP_HEADING_LEN_PX))
+                            tip_x = marker_x + math.cos(yaw_rad) * heading_len
+                            tip_y = marker_y - math.sin(yaw_rad) * heading_len
+                            side = max(4.0, r * 1.4)
+                            left_x = marker_x + math.cos(yaw_rad + 2.45) * side
+                            left_y = marker_y - math.sin(yaw_rad + 2.45) * side
+                            right_x = marker_x + math.cos(yaw_rad - 2.45) * side
+                            right_y = marker_y - math.sin(yaw_rad - 2.45) * side
+
+                            line_col = imgui.get_color_u32((1.0, 0.35, 0.22, 1.0))
+                            fill_col = imgui.get_color_u32((1.0, 0.35, 0.22, 0.95))
+                            outline_col = imgui.get_color_u32((0.02, 0.02, 0.02, 0.95))
+                            draw.add_line(
+                                (marker_x, marker_y), (tip_x, tip_y), line_col, 2.4
+                            )
+                            draw.add_triangle_filled(
+                                (tip_x, tip_y),
+                                (left_x, left_y),
+                                (right_x, right_y),
+                                fill_col,
+                            )
+                            draw.add_circle_filled(
+                                (marker_x, marker_y), r, fill_col, 16
+                            )
+                            draw.add_circle(
+                                (marker_x, marker_y), r, outline_col, 16, 1.0
+                            )
             imgui.end()
 
         _draw_iss_environment_map_window()
