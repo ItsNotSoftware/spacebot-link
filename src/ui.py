@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional
 import p3dimgui
 from direct.showbase.ShowBase import ShowBase
 from imgui_bundle import imgui
-from panda3d.core import PerspectiveLens
+from panda3d.core import PerspectiveLens, Texture
 
 from config import (
     ORIENT_PREVIEW_CROP_TOP,
@@ -46,6 +46,12 @@ class UI:
         self._imgui_ini_path: Path = (
             Path(__file__).resolve().parent.parent / "imgui.ini"
         )
+        self._iss_map_path: Path = (
+            Path(__file__).resolve().parent.parent / "assets/iss.jpeg"
+        )
+        self._iss_map_texture: Optional[Texture] = None
+        self._iss_map_tex_id: Optional[int] = None
+        self._show_iss_map_window: bool = True
         self._show_nav: bool = True
         self._show_pathviz: bool = True
         self._show_poses: bool = True
@@ -123,6 +129,7 @@ class UI:
             self._imgui_ready = False
             return
 
+        self._init_iss_map_texture()
         self._imgui_ready = True
         self.base.accept("imgui-new-frame", self._draw_overlay)
 
@@ -234,6 +241,48 @@ class UI:
             draw.add_text((chip_x0 + 10.0, chip_y0 + 7.0), title_text_col, label)
 
         _draw_attitude_preview_frame()
+
+        def _draw_iss_environment_map_window() -> None:
+            """Render the ISS environment map in a movable/closable ImGui window."""
+            if not self._show_iss_map_window:
+                return
+            if self._iss_map_tex_id is None or self._iss_map_texture is None:
+                return
+
+            map_x = max(pad, 32.0)
+            map_y = max(pad, 120.0)
+            try:
+                x0, x1, y0, y1 = ORIENT_PREVIEW_REGION
+                if x1 > x0 and y1 > y0:
+                    map_x = max(pad, float(x0) * scr_w)
+                    map_y = max(pad, (1.0 - float(y0)) * scr_h + 16.0)
+            except Exception:
+                pass
+
+            imgui.set_next_window_pos((map_x, map_y), imgui.Cond_.once)
+            imgui.set_next_window_size((560.0, 420.0), imgui.Cond_.once)
+            visible, self._show_iss_map_window = imgui.begin(
+                "ISS Environment Map",
+                self._show_iss_map_window,
+            )
+            if visible:
+                avail = imgui.get_content_region_avail()
+                tex_w = max(1, int(self._iss_map_texture.get_x_size()))
+                tex_h = max(1, int(self._iss_map_texture.get_y_size()))
+                scale = min(avail.x / float(tex_w), avail.y / float(tex_h))
+                if scale <= 0.0:
+                    scale = 1.0
+                draw_w = max(1.0, float(tex_w) * scale)
+                draw_h = max(1.0, float(tex_h) * scale)
+                imgui.image(
+                    imgui.ImTextureRef(int(self._iss_map_tex_id)),
+                    (draw_w, draw_h),
+                    (0.0, 1.0),
+                    (1.0, 0.0),
+                )
+            imgui.end()
+
+        _draw_iss_environment_map_window()
 
         imgui.set_next_window_pos((pad, pad), imgui.Cond_.once)
         imgui.set_next_window_size((1000, 620), imgui.Cond_.once)
@@ -663,27 +712,6 @@ class UI:
             imgui.pop_style_color(3)
             return pressed
 
-        def _dominant_axis_label(vec: Any) -> Optional[str]:
-            """Convert a vector to nearest signed ROS axis label."""
-            if not isinstance(vec, (tuple, list)) or len(vec) < 3:
-                return None
-            try:
-                x = float(vec[0])
-                y = float(vec[1])
-                z = float(vec[2])
-            except Exception:
-                return None
-            axis, value = max(
-                (("X", x), ("Y", y), ("Z", z)), key=lambda item: abs(item[1])
-            )
-            sign = "+" if value >= 0.0 else "-"
-            return f"{sign}{axis}"
-
-        def _opposite_axis_label(label: Optional[str]) -> Optional[str]:
-            if not label or len(label) < 2:
-                return None
-            return ("-" if label[0] == "+" else "+") + label[1:]
-
         is_follow = status.get("mode") == "Follow Mode"
 
         def _mode_colors(
@@ -736,50 +764,6 @@ class UI:
                 module_color = (0.70, 0.92, 1.0, 1.0)
             _text_bold(module_color, f"CURRENT MODULE: {label.upper()}")
 
-        control_forward = status.get("control_forward_ros")
-        control_right = status.get("control_right_ros")
-        control_up = status.get("control_up_ros")
-        goal_delta = status.get("goal_delta_ros")
-        forward_axis = _dominant_axis_label(control_forward)
-        right_axis = _dominant_axis_label(control_right)
-        up_axis = _dominant_axis_label(control_up)
-        has_orientation_assist = (
-            forward_axis is not None
-            or right_axis is not None
-            or up_axis is not None
-            or (isinstance(goal_delta, (tuple, list)) and len(goal_delta) >= 3)
-        )
-        if has_orientation_assist:
-            imgui.spacing()
-            imgui.separator()
-            imgui.text("Orientation Assist (map frame)")
-            imgui.text_disabled("WASD/EQ are camera-relative")
-            if forward_axis is not None:
-                back_axis = _opposite_axis_label(forward_axis) or "?"
-                imgui.text(f"W/S -> {forward_axis} / {back_axis}")
-            if right_axis is not None:
-                left_axis = _opposite_axis_label(right_axis) or "?"
-                imgui.text(f"A/D -> {left_axis} / {right_axis}")
-            if up_axis is not None:
-                down_axis = _opposite_axis_label(up_axis) or "?"
-                imgui.text(f"E/Q -> {up_axis} / {down_axis}")
-            if isinstance(goal_delta, (tuple, list)) and len(goal_delta) >= 3:
-                try:
-                    gx = float(goal_delta[0])
-                    gy = float(goal_delta[1])
-                    gz = float(goal_delta[2])
-                except Exception:
-                    gx = gy = gz = 0.0
-                imgui.text(f"Goal Δ map: X {gx:+.2f}  Y {gy:+.2f}  Z {gz:+.2f} m")
-                rel = str(status.get("goal_vertical_relation") or "").strip().lower()
-                if rel == "above":
-                    imgui.text_colored((0.45, 0.85, 1.0, 1.0), "Goal is above you")
-                elif rel == "below":
-                    imgui.text_colored((1.0, 0.72, 0.44, 1.0), "Goal is below you")
-                elif rel == "level":
-                    imgui.text_disabled("Goal is level with you")
-            imgui.separator()
-
         quality_badge = _quality_badge(status.get("path_goodness"))
         if quality_badge is not None:
             q, quality_label, quality_color = quality_badge
@@ -822,3 +806,30 @@ class UI:
             imgui.save_ini_settings_to_disk(str(self._imgui_ini_path))
         except Exception:
             pass
+
+    def _init_iss_map_texture(self) -> None:
+        """Load and register the ISS map texture for ImGui image rendering."""
+        if not self._iss_map_path.is_file():
+            return
+        try:
+            texture = self.base.loader.loadTexture(str(self._iss_map_path))
+            if texture is None:
+                return
+            existing_ids = {
+                int(k)
+                for k in getattr(self.base.imgui, "textures", {}).keys()
+                if isinstance(k, int) and 0 < k < 2_147_483_647
+            }
+            # Keep app-provided texture IDs in a high reserved range so they never
+            # collide with imgui internal IDs (font atlas and dynamic uploads).
+            tex_id = 2_000_000_000
+            while tex_id in existing_ids and tex_id > 1_500_000_000:
+                tex_id -= 1
+            if tex_id in existing_ids:
+                return
+            self.base.imgui.textures[tex_id] = texture
+            self._iss_map_texture = texture
+            self._iss_map_tex_id = tex_id
+        except Exception:
+            self._iss_map_texture = None
+            self._iss_map_tex_id = None
