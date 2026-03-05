@@ -87,6 +87,7 @@ from config import (
     PATH_MARKER_SPACING_M,
     PATH_MODE_DEFAULT,
     PATH_PLANE_FILL_ALPHA,
+    PATH_PLANE_HEIGHT_M,
     PATH_PLANE_OUTLINE_COLOR,
     PATH_PLANE_SIZE,
     PATH_PLANE_THICKNESS,
@@ -1087,15 +1088,28 @@ class Renderer:
         w, h = PATH_PLANE_SIZE
         half_w = 0.5 * max(0.05, float(w))
         half_h = 0.5 * max(0.05, float(h))
+        half_t = 0.5 * max(0.001, float(PATH_PLANE_HEIGHT_M))
 
         outline = LineSegs("path_plane_outline")
         outline.setThickness(PATH_PLANE_THICKNESS)
         outline.setColor(*PATH_PLANE_OUTLINE_COLOR)
-        outline.moveTo(-half_w, -half_h, 0.0)
-        outline.drawTo(half_w, -half_h, 0.0)
-        outline.drawTo(half_w, half_h, 0.0)
-        outline.drawTo(-half_w, half_h, 0.0)
-        outline.drawTo(-half_w, -half_h, 0.0)
+        # Top rectangle
+        outline.moveTo(-half_w, -half_h, +half_t)
+        outline.drawTo(half_w, -half_h, +half_t)
+        outline.drawTo(half_w, half_h, +half_t)
+        outline.drawTo(-half_w, half_h, +half_t)
+        outline.drawTo(-half_w, -half_h, +half_t)
+        # Bottom rectangle
+        outline.moveTo(-half_w, -half_h, -half_t)
+        outline.drawTo(half_w, -half_h, -half_t)
+        outline.drawTo(half_w, half_h, -half_t)
+        outline.drawTo(-half_w, half_h, -half_t)
+        outline.drawTo(-half_w, -half_h, -half_t)
+        # Vertical corner connectors
+        for sx in (-half_w, half_w):
+            for sy in (-half_h, half_h):
+                outline.moveTo(sx, sy, -half_t)
+                outline.drawTo(sx, sy, +half_t)
         outline_node = outline.create()
         if outline_node is None:
             return None
@@ -1106,15 +1120,15 @@ class Renderer:
         outline_np.setDepthWrite(False)
         outline_np.setDepthTest(False)
 
-        # Build fill explicitly in XY so the plane normal is local +Z.
+        # Build top fill explicitly in XY so the plane normal is local +Z.
         vdata = GeomVertexData(
             "path_plane_fill_vdata", GeomVertexFormat.getV3(), Geom.UHStatic
         )
         vertex = GeomVertexWriter(vdata, "vertex")
-        vertex.addData3f(-half_w, -half_h, 0.0)
-        vertex.addData3f(half_w, -half_h, 0.0)
-        vertex.addData3f(half_w, half_h, 0.0)
-        vertex.addData3f(-half_w, half_h, 0.0)
+        vertex.addData3f(-half_w, -half_h, +half_t)
+        vertex.addData3f(half_w, -half_h, +half_t)
+        vertex.addData3f(half_w, half_h, +half_t)
+        vertex.addData3f(-half_w, half_h, +half_t)
         tris = GeomTriangles(Geom.UHStatic)
         tris.addVertices(0, 1, 2)
         tris.addVertices(0, 2, 3)

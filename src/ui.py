@@ -292,6 +292,79 @@ class UI:
                     (0.0, 1.0),
                     (1.0, 0.0),
                 )
+                draw = imgui.get_window_draw_list()
+                path_xy = status.get("map_path_ros_xy")
+                if draw is not None and isinstance(path_xy, list) and len(path_xy) >= 2:
+                    off_x_m = self._iss_map_offset_x_m
+                    off_y_m = self._iss_map_offset_y_m
+                    sx = self._iss_map_scale_x_px_per_m * scale
+                    sy = self._iss_map_scale_y_px_per_m * scale
+                    prev_screen = None
+                    traj_col = imgui.get_color_u32((0.06, 0.52, 0.20, 0.95))
+                    end_col = imgui.get_color_u32((0.80, 1.0, 0.84, 0.98))
+                    for item in path_xy:
+                        try:
+                            px_m = float(item[0])
+                            py_m = float(item[1])
+                        except Exception:
+                            continue
+                        sxp = image_pos.x + draw_w * 0.5 + (px_m - off_x_m) * sx
+                        syp = image_pos.y + draw_h * 0.5 - (py_m - off_y_m) * sy
+                        sxp = max(image_pos.x, min(image_pos.x + draw_w, sxp))
+                        syp = max(image_pos.y, min(image_pos.y + draw_h, syp))
+                        if prev_screen is not None:
+                            draw.add_line(prev_screen, (sxp, syp), traj_col, 5.0)
+                        prev_screen = (sxp, syp)
+                    if prev_screen is not None:
+                        draw.add_circle_filled(prev_screen, 3.2, end_col, 14)
+
+                robot_pose = status.get("robot_ros_pose")
+                if isinstance(robot_pose, (tuple, list)) and len(robot_pose) >= 2:
+                    try:
+                        pos = robot_pose[0]
+                        rpy = robot_pose[1]
+                        robot_x_m = float(pos[0])
+                        robot_y_m = float(pos[1])
+                        robot_yaw_deg = float(rpy[2])
+                    except Exception:
+                        robot_x_m = robot_y_m = robot_yaw_deg = None
+                    if (
+                        robot_x_m is not None
+                        and robot_y_m is not None
+                        and robot_yaw_deg is not None
+                        and draw is not None
+                    ):
+                        off_x_m = self._iss_map_offset_x_m
+                        off_y_m = self._iss_map_offset_y_m
+                        sx = self._iss_map_scale_x_px_per_m * scale
+                        sy = self._iss_map_scale_y_px_per_m * scale
+                        robot_x = (
+                            image_pos.x + draw_w * 0.5 + (robot_x_m - off_x_m) * sx
+                        )
+                        robot_y = (
+                            image_pos.y + draw_h * 0.5 - (robot_y_m - off_y_m) * sy
+                        )
+                        robot_x = max(image_pos.x, min(image_pos.x + draw_w, robot_x))
+                        robot_y = max(image_pos.y, min(image_pos.y + draw_h, robot_y))
+                        robot_yaw = math.radians(
+                            robot_yaw_deg + self._iss_map_yaw_offset_deg
+                        )
+                        rr = max(2.2, self._iss_map_marker_radius_px * 1.0)
+                        rtip = max(8.0, self._iss_map_heading_len_px * 0.45)
+                        robot_tip_x = robot_x + math.cos(robot_yaw) * rtip
+                        robot_tip_y = robot_y - math.sin(robot_yaw) * rtip
+                        robot_fill_col = imgui.get_color_u32((0.20, 0.55, 1.0, 0.95))
+                        robot_ring_col = imgui.get_color_u32((0.05, 0.15, 0.35, 1.0))
+                        draw.add_line(
+                            (robot_x, robot_y),
+                            (robot_tip_x, robot_tip_y),
+                            robot_fill_col,
+                            2.1,
+                        )
+                        draw.add_circle_filled(
+                            (robot_x, robot_y), rr, robot_fill_col, 12
+                        )
+                        draw.add_circle((robot_x, robot_y), rr, robot_ring_col, 12, 1.0)
 
                 avatar_pose = status.get("avatar_ros_pose")
                 if isinstance(avatar_pose, (tuple, list)) and len(avatar_pose) >= 2:

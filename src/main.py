@@ -884,6 +884,33 @@ class SpacebotLinkApp(ShowBase):
         follow_tip = None
         if self.nav.state.follow_path_points:
             follow_tip = self.nav.state.follow_path_points[-1][0]
+        map_path_ros_xy: List[Tuple[float, float]] = []
+        map_source: List = []
+        if self.ui.mode == "Follow Mode" and self.nav.state.follow_path_points:
+            map_source = list(self.nav.state.follow_path_points)
+        elif self._last_path_poses:
+            map_source = list(self._last_path_poses)
+        if map_source:
+            step = max(1, int(len(map_source) / 280))
+            for pose in map_source[::step]:
+                pose_ros = panda_pose_to_ros_tuple(pose)
+                if pose_ros is None:
+                    continue
+                try:
+                    (px, py, _pz), _ = pose_ros
+                    map_path_ros_xy.append((float(px), float(py)))
+                except Exception:
+                    continue
+            if len(map_source) > 1:
+                tail_ros = panda_pose_to_ros_tuple(map_source[-1])
+                if tail_ros is not None:
+                    try:
+                        (tx, ty, _tz), _ = tail_ros
+                        tail = (float(tx), float(ty))
+                        if not map_path_ros_xy or map_path_ros_xy[-1] != tail:
+                            map_path_ros_xy.append(tail)
+                    except Exception:
+                        pass
 
         status = {
             "fps": self._avg_fps if self._avg_fps > 0.0 else imgui.get_io().framerate,
@@ -919,6 +946,7 @@ class SpacebotLinkApp(ShowBase):
             "last_goal_panda": self.nav.state.last_goal_pose,
             "avatar_ros_pose": avatar_ros,
             "robot_ros_pose": robot_ros,
+            "map_path_ros_xy": map_path_ros_xy,
             "avatar_robot_error": pos_err,
             "goal_delta_ros": goal_delta_ros,
             "goal_vertical_relation": goal_vertical_relation,
