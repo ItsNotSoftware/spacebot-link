@@ -120,6 +120,14 @@ ORIENT_PREVIEW_MOTION_HINT_REF_SPEED_MPS = 0.35
 ORIENT_PREVIEW_MOTION_HINT_SMOOTHING = 0.35
 ORIENT_PREVIEW_MOTION_HINT_FB_GAIN = 2.0
 
+# ISS map overlay calibration (robot ROS XY -> image pixels)
+# Pixel origin is image center. Positive X goes right, positive Y goes up.
+ISS_MAP_ROBOT_OFFSET_XY_M = (0.0, 0.0)
+ISS_MAP_ROBOT_SCALE_PX_PER_M = (22.0, 22.0)
+ISS_MAP_YAW_OFFSET_DEG = 0.0
+ISS_MAP_MARKER_RADIUS_PX = 6.0
+ISS_MAP_HEADING_LEN_PX = 24.0
+
 # UI font (ImGui). If the file is missing, the default ImGui font is used.
 UI_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 UI_FONT_SIZE_PX = 24.0
