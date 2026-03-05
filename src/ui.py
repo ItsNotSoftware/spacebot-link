@@ -663,6 +663,27 @@ class UI:
             imgui.pop_style_color(3)
             return pressed
 
+        def _dominant_axis_label(vec: Any) -> Optional[str]:
+            """Convert a vector to nearest signed ROS axis label."""
+            if not isinstance(vec, (tuple, list)) or len(vec) < 3:
+                return None
+            try:
+                x = float(vec[0])
+                y = float(vec[1])
+                z = float(vec[2])
+            except Exception:
+                return None
+            axis, value = max(
+                (("X", x), ("Y", y), ("Z", z)), key=lambda item: abs(item[1])
+            )
+            sign = "+" if value >= 0.0 else "-"
+            return f"{sign}{axis}"
+
+        def _opposite_axis_label(label: Optional[str]) -> Optional[str]:
+            if not label or len(label) < 2:
+                return None
+            return ("-" if label[0] == "+" else "+") + label[1:]
+
         is_follow = status.get("mode") == "Follow Mode"
 
         def _mode_colors(
@@ -714,6 +735,50 @@ class UI:
             else:
                 module_color = (0.70, 0.92, 1.0, 1.0)
             _text_bold(module_color, f"CURRENT MODULE: {label.upper()}")
+
+        control_forward = status.get("control_forward_ros")
+        control_right = status.get("control_right_ros")
+        control_up = status.get("control_up_ros")
+        goal_delta = status.get("goal_delta_ros")
+        forward_axis = _dominant_axis_label(control_forward)
+        right_axis = _dominant_axis_label(control_right)
+        up_axis = _dominant_axis_label(control_up)
+        has_orientation_assist = (
+            forward_axis is not None
+            or right_axis is not None
+            or up_axis is not None
+            or (isinstance(goal_delta, (tuple, list)) and len(goal_delta) >= 3)
+        )
+        if has_orientation_assist:
+            imgui.spacing()
+            imgui.separator()
+            imgui.text("Orientation Assist (map frame)")
+            imgui.text_disabled("WASD/EQ are camera-relative")
+            if forward_axis is not None:
+                back_axis = _opposite_axis_label(forward_axis) or "?"
+                imgui.text(f"W/S -> {forward_axis} / {back_axis}")
+            if right_axis is not None:
+                left_axis = _opposite_axis_label(right_axis) or "?"
+                imgui.text(f"A/D -> {left_axis} / {right_axis}")
+            if up_axis is not None:
+                down_axis = _opposite_axis_label(up_axis) or "?"
+                imgui.text(f"E/Q -> {up_axis} / {down_axis}")
+            if isinstance(goal_delta, (tuple, list)) and len(goal_delta) >= 3:
+                try:
+                    gx = float(goal_delta[0])
+                    gy = float(goal_delta[1])
+                    gz = float(goal_delta[2])
+                except Exception:
+                    gx = gy = gz = 0.0
+                imgui.text(f"Goal Δ map: X {gx:+.2f}  Y {gy:+.2f}  Z {gz:+.2f} m")
+                rel = str(status.get("goal_vertical_relation") or "").strip().lower()
+                if rel == "above":
+                    imgui.text_colored((0.45, 0.85, 1.0, 1.0), "Goal is above you")
+                elif rel == "below":
+                    imgui.text_colored((1.0, 0.72, 0.44, 1.0), "Goal is below you")
+                elif rel == "level":
+                    imgui.text_disabled("Goal is level with you")
+            imgui.separator()
 
         quality_badge = _quality_badge(status.get("path_goodness"))
         if quality_badge is not None:
