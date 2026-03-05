@@ -48,6 +48,7 @@ from config import (
     TOPIC_POSE,
     TRANSPARENCY_SORT_CFG,
     UI_RESPONSE_DELAY_FILL_S,
+    WINDOW_SIZE_PX,
     WINDOW_TITLE,
     default_cmd_endpoint,
     default_gltf_model,
@@ -72,6 +73,7 @@ from utils import (
 
 # ---- config before ShowBase ----
 loadPrcFileData("", f"window-title {WINDOW_TITLE}")
+loadPrcFileData("", f"win-size {int(WINDOW_SIZE_PX[0])} {int(WINDOW_SIZE_PX[1])}")
 loadPrcFileData("", FRAMEBUFFER_SRGB_CFG)
 loadPrcFileData("", TRANSPARENCY_SORT_CFG)
 

@@ -257,18 +257,21 @@ class UI:
             if self._iss_map_tex_id is None or self._iss_map_texture is None:
                 return
 
-            map_x = max(pad, 32.0)
-            map_y = max(pad, 120.0)
+            map_w = 860.0
+            map_h = 490.0
+            dashboard_w = 540.0
+            dashboard_x = max(pad, scr_w - dashboard_w - pad)
+            map_x = max(pad, dashboard_x - map_w - 12.0)
+            map_y = max(pad, 180.0)
             try:
                 x0, x1, y0, y1 = ORIENT_PREVIEW_REGION
                 if x1 > x0 and y1 > y0:
-                    map_x = max(pad, float(x0) * scr_w)
-                    map_y = max(pad, (1.0 - float(y0)) * scr_h + 16.0)
+                    map_y = max(pad, (1.0 - float(y0)) * scr_h + 52.0)
             except Exception:
                 pass
 
-            imgui.set_next_window_pos((map_x, map_y), imgui.Cond_.once)
-            imgui.set_next_window_size((560.0, 420.0), imgui.Cond_.once)
+            imgui.set_next_window_pos((map_x, map_y), imgui.Cond_.first_use_ever)
+            imgui.set_next_window_size((map_w, map_h), imgui.Cond_.first_use_ever)
             visible, self._show_iss_map_window = imgui.begin(
                 "ISS Environment Map",
                 self._show_iss_map_window,
@@ -323,23 +326,29 @@ class UI:
                             right_x = marker_x + math.cos(yaw_rad - 2.45) * side
                             right_y = marker_y - math.sin(yaw_rad - 2.45) * side
 
-                            line_col = imgui.get_color_u32((1.0, 0.35, 0.22, 1.0))
-                            fill_col = imgui.get_color_u32((1.0, 0.35, 0.22, 0.95))
-                            outline_col = imgui.get_color_u32((0.02, 0.02, 0.02, 0.95))
+                            trail_col = imgui.get_color_u32((0.86, 0.22, 0.22, 0.95))
+                            arrow_col = imgui.get_color_u32((0.96, 0.14, 0.14, 1.0))
+                            core_col = imgui.get_color_u32((0.02, 0.02, 0.02, 1.0))
+                            ring_col = imgui.get_color_u32((0.42, 0.08, 0.08, 1.0))
+                            glow_col = imgui.get_color_u32((0.92, 0.24, 0.24, 0.20))
+                            draw.add_circle_filled(
+                                (marker_x, marker_y), r * 2.1, glow_col, 20
+                            )
                             draw.add_line(
-                                (marker_x, marker_y), (tip_x, tip_y), line_col, 2.4
+                                (marker_x, marker_y), (tip_x, tip_y), trail_col, 2.8
                             )
                             draw.add_triangle_filled(
                                 (tip_x, tip_y),
                                 (left_x, left_y),
                                 (right_x, right_y),
-                                fill_col,
+                                arrow_col,
                             )
                             draw.add_circle_filled(
-                                (marker_x, marker_y), r, fill_col, 16
+                                (marker_x, marker_y), r, core_col, 18
                             )
+                            draw.add_circle((marker_x, marker_y), r, ring_col, 18, 1.5)
                             draw.add_circle(
-                                (marker_x, marker_y), r, outline_col, 16, 1.0
+                                (marker_x, marker_y), r * 1.55, trail_col, 18, 1.2
                             )
             imgui.end()
 
