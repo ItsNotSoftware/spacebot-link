@@ -14,7 +14,7 @@ import zmq
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from imgui_bundle import imgui
-from panda3d.core import PythonTask, loadPrcFileData
+from panda3d.core import PythonTask, Vec3, loadPrcFileData
 
 from config import (
     AVATAR_AUTO_RESET_DELAY_S,
@@ -807,6 +807,46 @@ class SpacebotLinkApp(ShowBase):
             return [robot_pose] + poses
         return poses
 
+    @staticmethod
+    def _normalize_vec3_tuple(
+        vec: Tuple[float, float, float],
+    ) -> Optional[Tuple[float, float, float]]:
+        x, y, z = vec
+        mag = (x * x + y * y + z * z) ** 0.5
+        if not math.isfinite(mag) or mag <= 1e-6:
+            return None
+        return (x / mag, y / mag, z / mag)
+
+    @staticmethod
+    def _panda_vec_to_ros(vec: Vec3) -> Tuple[float, float, float]:
+        """Convert Panda3D vector to ROS map frame vector."""
+        return (float(vec.y), float(-vec.x), float(vec.z))
+
+    def _control_axes_ros(
+        self,
+    ) -> Optional[Dict[str, Tuple[float, float, float]]]:
+        """Return camera-relative control axes expressed in ROS map frame."""
+        frame = self.camera if self.camera is not None else self.render
+        if frame is None or self.render is None:
+            return None
+        try:
+            q = frame.getQuat(self.render)
+        except Exception:
+            return None
+
+        forward = self._normalize_vec3_tuple(
+            self._panda_vec_to_ros(q.xform(Vec3(0.0, 1.0, 0.0)))
+        )
+        right = self._normalize_vec3_tuple(
+            self._panda_vec_to_ros(q.xform(Vec3(1.0, 0.0, 0.0)))
+        )
+        up = self._normalize_vec3_tuple(
+            self._panda_vec_to_ros(q.xform(Vec3(0.0, 0.0, 1.0)))
+        )
+        if forward is None or right is None or up is None:
+            return None
+        return {"forward": forward, "right": right, "up": up}
+
     # ---- helpers ----
     def _collect_status(self) -> Dict[str, Any]:
         """Assemble a status snapshot for the overlay."""
@@ -820,14 +860,24 @@ class SpacebotLinkApp(ShowBase):
 
         avatar_pose = self.renderer.get_avatar_pose()
         avatar_ros = panda_pose_to_ros_tuple(avatar_pose)
+        control_axes_ros = self._control_axes_ros()
         response_delay_fill = self._avatar_delay_fill_progress(avatar_pose)
         robot_ros = self.nav.state.last_ros_pose
         pos_err = None
+        goal_delta_ros: Optional[Tuple[float, float, float]] = None
+        goal_vertical_relation: Optional[str] = None
         if avatar_ros is not None and robot_ros is not None:
             (ax, ay, az), _ = avatar_ros
             (rx, ry, rz), _ = robot_ros
             dx, dy, dz = ax - rx, ay - ry, az - rz
             pos_err = (dx * dx + dy * dy + dz * dz) ** 0.5
+            goal_delta_ros = (float(dx), float(dy), float(dz))
+            if dz > 0.05:
+                goal_vertical_relation = "above"
+            elif dz < -0.05:
+                goal_vertical_relation = "below"
+            else:
+                goal_vertical_relation = "level"
 
         follow_tip = None
         if self.nav.state.follow_path_points:
@@ -868,6 +918,15 @@ class SpacebotLinkApp(ShowBase):
             "avatar_ros_pose": avatar_ros,
             "robot_ros_pose": robot_ros,
             "avatar_robot_error": pos_err,
+            "goal_delta_ros": goal_delta_ros,
+            "goal_vertical_relation": goal_vertical_relation,
+            "control_forward_ros": (
+                control_axes_ros.get("forward") if control_axes_ros else None
+            ),
+            "control_right_ros": (
+                control_axes_ros.get("right") if control_axes_ros else None
+            ),
+            "control_up_ros": control_axes_ros.get("up") if control_axes_ros else None,
             "floor_height": self._last_floor_height,
             "octomap_json": (
                 self._last_octomap_raw[:2000] if self._last_octomap_raw else None
