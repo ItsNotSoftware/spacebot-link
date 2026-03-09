@@ -80,6 +80,7 @@ from config import (
     PATH_GHOST_START_OFFSET_M,
     PATH_LINE_COLOR,
     PATH_LINE_RIBBON_ALPHA,
+    PATH_LINE_RIBBON_HEIGHT_M,
     PATH_LINE_RIBBON_LIFT_M,
     PATH_LINE_RIBBON_WIDTH_M,
     PATH_LINE_SAMPLE_SPACING_M,
@@ -795,6 +796,7 @@ class Renderer:
         prim = GeomTriangles(Geom.UHStatic)
 
         base_width = max(0.03, float(PATH_LINE_RIBBON_WIDTH_M))
+        half_height = 0.5 * max(0.0, float(PATH_LINE_RIBBON_HEIGHT_M))
         z_lift = float(PATH_LINE_RIBBON_LIFT_M)
         any_risk = any(v > 1e-6 for v in segment_risks)
         point_count = len(line_poses)
@@ -888,13 +890,29 @@ class Renderer:
             i0 = vtx.getWriteRow()
             p1l = p1 - half_side_1
             p1r = p1 + half_side_1
-            p2r = p2 + half_side_2
             p2l = p2 - half_side_2
-            for p in (p1l, p1r, p2r, p2l):
-                vtx.addData3f(p)
+            p2r = p2 + half_side_2
+            dz = Vec3(0.0, 0.0, half_height)
+            # 8 vertices: left/right × bottom/top at each endpoint
+            # order: p1lb, p1lt, p1rb, p1rt, p2lb, p2lt, p2rb, p2rt
+            for p, offset in (
+                (p1l, -dz), (p1l, dz), (p1r, -dz), (p1r, dz),
+                (p2l, -dz), (p2l, dz), (p2r, -dz), (p2r, dz),
+            ):
+                vtx.addData3f(p + offset)
                 col.addData4f(*rgba)
-            prim.addVertices(i0, i0 + 1, i0 + 2)
-            prim.addVertices(i0, i0 + 2, i0 + 3)
+            # Top face (y+): p1lt(1), p1rt(3), p2rt(7), p2lt(5)
+            prim.addVertices(i0 + 1, i0 + 3, i0 + 7)
+            prim.addVertices(i0 + 1, i0 + 7, i0 + 5)
+            # Bottom face: p1lb(0), p1rb(2), p2rb(6), p2lb(4)
+            prim.addVertices(i0 + 0, i0 + 2, i0 + 6)
+            prim.addVertices(i0 + 0, i0 + 6, i0 + 4)
+            # Left side face: p1lb(0), p1lt(1), p2lt(5), p2lb(4)
+            prim.addVertices(i0 + 0, i0 + 1, i0 + 5)
+            prim.addVertices(i0 + 0, i0 + 5, i0 + 4)
+            # Right side face: p1rb(2), p1rt(3), p2rt(7), p2rb(6)
+            prim.addVertices(i0 + 2, i0 + 3, i0 + 7)
+            prim.addVertices(i0 + 2, i0 + 7, i0 + 6)
 
         if vdata.getNumRows() > 0:
             geom = Geom(vdata)
