@@ -250,6 +250,63 @@ class UI:
 
         _draw_attitude_preview_frame()
 
+        def _quality_badge(value):
+            try:
+                q = max(0.0, min(1.0, float(value)))
+            except Exception:
+                return None
+            excellent_thr = float(PATH_QUALITY_THRESH_EXCELLENT)
+            good_thr = float(PATH_QUALITY_THRESH_GOOD)
+            risky_thr = float(PATH_QUALITY_THRESH_RISKY)
+            thresholds = sorted([risky_thr, good_thr, excellent_thr])
+            risky_thr, good_thr, excellent_thr = (
+                thresholds[0],
+                thresholds[1],
+                thresholds[2],
+            )
+            if q >= excellent_thr:
+                label = PATH_QUALITY_LABEL_EXCELLENT
+            elif q >= good_thr:
+                label = PATH_QUALITY_LABEL_GOOD
+            elif q >= risky_thr:
+                label = PATH_QUALITY_LABEL_RISKY
+            else:
+                label = PATH_QUALITY_LABEL_CRITICAL
+            if q < 0.5:
+                t = q / 0.5
+                c0 = (0.95, 0.22, 0.20, 1.0)
+                c1 = (1.00, 0.78, 0.10, 1.0)
+            else:
+                t = (q - 0.5) / 0.5
+                c0 = (1.00, 0.78, 0.10, 1.0)
+                c1 = (0.22, 0.92, 0.38, 1.0)
+            color = tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))
+            return q, label, color
+
+        def _draw_quality_bar(
+            q: float, color: tuple[float, float, float, float], width: float = 0.0
+        ) -> None:
+            """Draw a compact horizontal bar showing path goodness."""
+            draw = imgui.get_window_draw_list()
+            if draw is None:
+                return
+            pos = imgui.get_cursor_screen_pos()
+            avail_w = imgui.get_content_region_avail().x
+            bar_w = max(120.0, width if width > 0.0 else avail_w)
+            bar_h = 12.0
+            x0, y0 = pos.x, pos.y
+            x1, y1 = x0 + bar_w, y0 + bar_h
+            rounding = 6.0
+            bg_col = imgui.get_color_u32((0.16, 0.17, 0.20, 1.0))
+            fill_col = imgui.get_color_u32(color)
+            border_col = imgui.get_color_u32((0.55, 0.58, 0.65, 0.55))
+            fill_x = x0 + max(0.0, min(1.0, q)) * bar_w
+            draw.add_rect_filled((x0, y0), (x1, y1), bg_col, rounding)
+            if fill_x > x0 + 1.0:
+                draw.add_rect_filled((x0, y0), (fill_x, y1), fill_col, rounding)
+            draw.add_rect((x0, y0), (x1, y1), border_col, rounding)
+            imgui.dummy((bar_w, bar_h))
+
         def _draw_iss_environment_map_window() -> None:
             """Render the ISS environment map in a movable/closable ImGui window."""
             if not self._show_iss_map_window:
@@ -414,6 +471,31 @@ class UI:
                             av_cx, av_cy, av_yaw, r, head_len,
                             (1.0, 0.55, 0.10, 1.0),
                         )
+
+                map_avail = imgui.get_content_region_avail().x
+                quality_badge = _quality_badge(status.get("path_goodness"))
+                if quality_badge is not None:
+                    q, quality_label, quality_color = quality_badge
+                    imgui.spacing()
+                    imgui.text_colored(quality_color, f"PATH {quality_label.upper()} ({q:.2f})")
+                    _draw_quality_bar(q, quality_color, width=map_avail)
+                bar_progress = 0.0
+                try:
+                    bar_progress = max(
+                        0.0, min(1.0, float(status.get("response_delay_fill", 0.0)))
+                    )
+                except Exception:
+                    bar_progress = 0.0
+                if bar_progress < 0.999:
+                    imgui.spacing()
+                    imgui.text_disabled("Robot Response Delay")
+                    imgui.push_style_color(imgui.Col_.frame_bg, (0.10, 0.14, 0.18, 1.0))
+                    imgui.push_style_color(imgui.Col_.plot_histogram, (0.20, 0.72, 0.95, 1.0))
+                    imgui.push_style_color(
+                        imgui.Col_.plot_histogram_hovered, (0.30, 0.80, 1.0, 1.0)
+                    )
+                    imgui.progress_bar(bar_progress, (map_avail, 12.0), "")
+                    imgui.pop_style_color(3)
             imgui.end()
 
         _draw_iss_environment_map_window()
@@ -431,63 +513,6 @@ class UI:
                 if lowered in ("true", "false"):
                     return lowered == "true"
             return None
-
-        def _quality_badge(value):
-            try:
-                q = max(0.0, min(1.0, float(value)))
-            except Exception:
-                return None
-            excellent_thr = float(PATH_QUALITY_THRESH_EXCELLENT)
-            good_thr = float(PATH_QUALITY_THRESH_GOOD)
-            risky_thr = float(PATH_QUALITY_THRESH_RISKY)
-            thresholds = sorted([risky_thr, good_thr, excellent_thr])
-            risky_thr, good_thr, excellent_thr = (
-                thresholds[0],
-                thresholds[1],
-                thresholds[2],
-            )
-            if q >= excellent_thr:
-                label = PATH_QUALITY_LABEL_EXCELLENT
-            elif q >= good_thr:
-                label = PATH_QUALITY_LABEL_GOOD
-            elif q >= risky_thr:
-                label = PATH_QUALITY_LABEL_RISKY
-            else:
-                label = PATH_QUALITY_LABEL_CRITICAL
-            if q < 0.5:
-                t = q / 0.5
-                c0 = (0.95, 0.22, 0.20, 1.0)
-                c1 = (1.00, 0.78, 0.10, 1.0)
-            else:
-                t = (q - 0.5) / 0.5
-                c0 = (1.00, 0.78, 0.10, 1.0)
-                c1 = (0.22, 0.92, 0.38, 1.0)
-            color = tuple(c0[i] + (c1[i] - c0[i]) * t for i in range(4))
-            return q, label, color
-
-        def _draw_quality_bar(
-            q: float, color: tuple[float, float, float, float], width: float = 0.0
-        ) -> None:
-            """Draw a compact horizontal bar showing path goodness."""
-            draw = imgui.get_window_draw_list()
-            if draw is None:
-                return
-            pos = imgui.get_cursor_screen_pos()
-            avail_w = imgui.get_content_region_avail().x
-            bar_w = max(120.0, width if width > 0.0 else avail_w)
-            bar_h = 12.0
-            x0, y0 = pos.x, pos.y
-            x1, y1 = x0 + bar_w, y0 + bar_h
-            rounding = 6.0
-            bg_col = imgui.get_color_u32((0.16, 0.17, 0.20, 1.0))
-            fill_col = imgui.get_color_u32(color)
-            border_col = imgui.get_color_u32((0.55, 0.58, 0.65, 0.55))
-            fill_x = x0 + max(0.0, min(1.0, q)) * bar_w
-            draw.add_rect_filled((x0, y0), (x1, y1), bg_col, rounding)
-            if fill_x > x0 + 1.0:
-                draw.add_rect_filled((x0, y0), (fill_x, y1), fill_col, rounding)
-            draw.add_rect((x0, y0), (x1, y1), border_col, rounding)
-            imgui.dummy((bar_w, bar_h))
 
         def _format_hhmmss(seconds: Any) -> str:
             try:
@@ -758,139 +783,34 @@ class UI:
         if bool(status.get("direct_mode", False)):
             return
 
-        # Top-right control window
-        ctrl_w = 540.0
-        ctrl_h = 450.0
-        ctrl_x = max(pad, scr_w - ctrl_w - pad)
-        ctrl_y = pad
-        imgui.set_next_window_pos((ctrl_x, ctrl_y), imgui.Cond_.always)
-        imgui.set_next_window_size((ctrl_w, ctrl_h), imgui.Cond_.once)
-        imgui.begin(
-            "Dashboard",
-            flags=imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_resize,
-        )
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, (14.0, 10.0))
-        imgui.push_style_var(imgui.StyleVar_.frame_padding, (16.0, 14.0))
-
-        avail = imgui.get_content_region_avail().x
-        half = (avail - imgui.get_style().item_spacing.x) * 0.5
-        btn_h = 76
-
-        def _text_bold(color, text: str) -> None:
-            """Draw text with a simple double-pass to mimic a bolder weight."""
-            pos = imgui.get_cursor_screen_pos()
-            draw = imgui.get_window_draw_list()
-            if draw is None:
-                imgui.text_colored(color, text)
-                return
-            shadow = (0.02, 0.02, 0.02, color[3] * 0.95)
-            shadow_u32 = imgui.get_color_u32(shadow)
-            color_u32 = imgui.get_color_u32(color)
-            # Multi-pass offsets create a thicker/faux-bold appearance.
-            for ox, oy in ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (2.0, 0.5)):
-                draw.add_text((pos.x + ox, pos.y + oy), shadow_u32, text)
-            draw.add_text((pos.x, pos.y), color_u32, text)
-            imgui.dummy(imgui.calc_text_size(text))
-
-        def _button(
-            label: str,
-            size: tuple[float, float],
-            base_col: tuple[float, float, float, float],
-            hover_col: tuple[float, float, float, float],
-            active_col: tuple[float, float, float, float],
-        ) -> bool:
-            """Render a styled button and return whether it was pressed."""
-            imgui.push_style_color(imgui.Col_.button, base_col)
-            imgui.push_style_color(imgui.Col_.button_hovered, hover_col)
-            imgui.push_style_color(imgui.Col_.button_active, active_col)
-            pressed = imgui.button(label, size)
-            imgui.pop_style_color(3)
-            return pressed
-
+        # Top-center mode indicator
         is_follow = status.get("mode") == "Follow Mode"
-
-        def _mode_colors(
-            active: bool,
-        ) -> tuple[
-            tuple[float, float, float, float],
-            tuple[float, float, float, float],
-            tuple[float, float, float, float],
-        ]:
-            """Return base/hover/active colors based on mode state."""
-            if active:
-                return (
-                    (0.25, 0.55, 0.92, 1.0),
-                    (0.30, 0.60, 0.98, 1.0),
-                    (0.22, 0.48, 0.80, 1.0),
-                )
-            return (
-                (0.24, 0.34, 0.48, 1.0),
-                (0.28, 0.40, 0.56, 1.0),
-                (0.22, 0.32, 0.44, 1.0),
+        mode_label = "FOLLOW MODE" if is_follow else "GOAL MODE"
+        mode_rgb = (0.25, 0.55, 0.92) if is_follow else (0.22, 0.82, 0.48)
+        draw = imgui.get_foreground_draw_list()
+        if draw is not None:
+            text_sz = imgui.calc_text_size(mode_label)
+            chip_w = text_sz.x * 1.6 + 64.0
+            chip_h = text_sz.y * 1.6 + 32.0
+            chip_x0 = (scr_w - chip_w) * 0.5
+            chip_y0 = pad
+            chip_x1 = chip_x0 + chip_w
+            chip_y1 = chip_y0 + chip_h
+            shadow_col = imgui.get_color_u32((0.0, 0.0, 0.0, 0.45))
+            bg_col = imgui.get_color_u32((0.06, 0.08, 0.12, 0.92))
+            border_col = imgui.get_color_u32((*mode_rgb, 0.85))
+            text_col = imgui.get_color_u32((*mode_rgb, 1.0))
+            draw.add_rect_filled(
+                (chip_x0 + 2.0, chip_y0 + 3.0),
+                (chip_x1 + 2.0, chip_y1 + 3.0),
+                shadow_col, 8.0,
             )
-
-        f_base, f_hover, f_active = _mode_colors(is_follow)
-        g_base, g_hover, g_active = _mode_colors(not is_follow)
-
-        # imgui.text_disabled("Navigation Mode")
-        if _button("FOLLOW", (half, btn_h), f_base, f_hover, f_active):
-            status.get("activate_follow", lambda: None)()
-        imgui.same_line()
-        if _button("GOAL", (half, btn_h), g_base, g_hover, g_active):
-            status.get("activate_goal", lambda: None)()
-        btn_w = avail
-        imgui.spacing()
-        if _button(
-            "ABORT",
-            (btn_w, btn_h),
-            (0.70, 0.22, 0.22, 1.0),
-            (0.78, 0.28, 0.28, 1.0),
-            (0.60, 0.18, 0.18, 1.0),
-        ):
-            self.trigger_abort()
-
-        module_name = status.get("current_iss_module")
-        if module_name:
-            imgui.spacing()
-            label = str(module_name).strip()
-            if label.lower() == "unknown":
-                module_color = (1.0, 0.72, 0.36, 1.0)
-            else:
-                module_color = (0.70, 0.92, 1.0, 1.0)
-            _text_bold(module_color, f"CURRENT MODULE: {label.upper()}")
-
-        quality_badge = _quality_badge(status.get("path_goodness"))
-        if quality_badge is not None:
-            q, quality_label, quality_color = quality_badge
-            imgui.spacing()
-            # imgui.text_disabled("Path Quality")
-            _text_bold(quality_color, f"PATH {quality_label.upper()} ({q:.2f})")
-            _draw_quality_bar(q, quality_color, width=avail)
-        bar_progress = 0.0
-        try:
-            bar_progress = max(
-                0.0, min(1.0, float(status.get("response_delay_fill", 0.0)))
+            draw.add_rect_filled((chip_x0, chip_y0), (chip_x1, chip_y1), bg_col, 8.0)
+            draw.add_rect((chip_x0, chip_y0), (chip_x1, chip_y1), border_col, 8.0, 0, 1.5)
+            draw.add_text(
+                (chip_x0 + (chip_w - text_sz.x) * 0.5, chip_y0 + (chip_h - text_sz.y) * 0.5),
+                text_col, mode_label,
             )
-        except Exception:
-            bar_progress = 0.0
-        if bar_progress < 0.999:
-            imgui.spacing()
-            try:
-                delay_fill_s = max(0.1, float(status.get("response_delay_fill_s", 2.5)))
-            except Exception:
-                delay_fill_s = 2.5
-            imgui.text_disabled("Robot Response Delay")
-            imgui.push_style_color(imgui.Col_.frame_bg, (0.10, 0.14, 0.18, 1.0))
-            imgui.push_style_color(imgui.Col_.plot_histogram, (0.20, 0.72, 0.95, 1.0))
-            imgui.push_style_color(
-                imgui.Col_.plot_histogram_hovered, (0.30, 0.80, 1.0, 1.0)
-            )
-            imgui.progress_bar(bar_progress, (avail, 12.0), "")
-            imgui.pop_style_color(3)
-        imgui.separator()
-
-        imgui.pop_style_var(2)
-        imgui.end()
 
     def save_imgui_settings(self) -> None:
         """Persist ImGui layout to disk if initialized."""

@@ -456,9 +456,9 @@ class InputController:
             elif _mw_down(BACKWARD_BUTTON):
                 lin_x = -MOVE_SPEED
             if _mw_down(LEFT_BUTTON):
-                lin_y = +MOVE_SPEED
-            elif _mw_down(RIGHT_BUTTON):
                 lin_y = -MOVE_SPEED
+            elif _mw_down(RIGHT_BUTTON):
+                lin_y = +MOVE_SPEED
             if _mw_down(UP_BUTTON) or _mw_down(UP_BUTTON_ALT):
                 lin_z = +MOVE_SPEED
             if _mw_down(DOWN_BUTTON) or _mw_down(DOWN_BUTTON_ALT):
@@ -467,7 +467,7 @@ class InputController:
                 lx, ly = self._move_stick(gp)
                 lt, rt = self._triggers(gp)
                 gx = (-ly) * MOVE_SPEED
-                gy = lx * MOVE_SPEED
+                gy = -lx * MOVE_SPEED
                 gz = (rt - lt) * MOVE_SPEED * GAMEPAD_VERTICAL_SCALE
                 if gx != 0.0:
                     lin_x = gx
