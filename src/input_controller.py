@@ -477,13 +477,13 @@ class InputController:
                     lin_z = gz
 
             if _mw_down(ROLL_LEFT_BUTTON):
-                ang_x = +ROTATE_SPEED
-            elif _mw_down(ROLL_RIGHT_BUTTON):
                 ang_x = -ROTATE_SPEED
+            elif _mw_down(ROLL_RIGHT_BUTTON):
+                ang_x = +ROTATE_SPEED
             if _mw_down(PITCH_UP_BUTTON):
-                ang_y = +ROTATE_SPEED
-            elif _mw_down(PITCH_DOWN_BUTTON):
                 ang_y = -ROTATE_SPEED
+            elif _mw_down(PITCH_DOWN_BUTTON):
+                ang_y = +ROTATE_SPEED
             if _mw_down(YAW_LEFT_BUTTON):
                 ang_z = +ROTATE_SPEED
             elif _mw_down(YAW_RIGHT_BUTTON):
@@ -493,7 +493,7 @@ class InputController:
                 if rx != 0.0:
                     ang_x = rx * ROTATE_SPEED
                 if ry != 0.0:
-                    ang_y = ry * ROTATE_SPEED
+                    ang_y = -ry * ROTATE_SPEED
                 if self._button_down(gp, GAMEPAD_BUTTON_L1, GAMEPAD_BUTTON_INDEX_L1):
                     ang_z = +ROTATE_SPEED
                 elif self._button_down(gp, GAMEPAD_BUTTON_R1, GAMEPAD_BUTTON_INDEX_R1):
