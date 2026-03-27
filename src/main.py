@@ -172,6 +172,7 @@ class SpacebotLinkApp(ShowBase):
         self._total_flight_length_m: float = 0.0
         self._last_distance_pose: Optional[Tuple[float, float, float]] = None
         self._operational_start_s: float = time.monotonic()
+        self._last_metrics_print_s: float = time.monotonic()
         self._iss_module_points: Dict[str, List[Tuple[float, float]]] = (
             self._load_iss_module_points()
         )
@@ -749,6 +750,17 @@ class SpacebotLinkApp(ShowBase):
         self._avg_fps = (
             (self._fps_sum / len(self._fps_samples)) if self._fps_samples else 0.0
         )
+        now = time.monotonic()
+        if now - self._last_metrics_print_s >= 5.0:
+            self._last_metrics_print_s = now
+            op_s = max(0.0, now - self._operational_start_s)
+            h = int(op_s) // 3600
+            m = (int(op_s) % 3600) // 60
+            s = int(op_s) % 60
+            print(
+                f"[metrics] distance={self._total_flight_length_m:.2f} m  "
+                f"operational={h:02d}:{m:02d}:{s:02d}"
+            )
         return Task.cont
 
     def _goal_publish_task(self, task: PythonTask) -> int:
