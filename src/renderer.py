@@ -534,6 +534,7 @@ class Renderer:
             return
 
         def _quat_from_ros(ori: dict) -> Optional[Tuple[float, float, float, float]]:
+            """Read a ROS orientation dict into a (w, x, y, z) tuple."""
             try:
                 return (
                     float(ori.get("w")),
@@ -548,6 +549,7 @@ class Renderer:
             lhs: Tuple[float, float, float, float],
             rhs: Tuple[float, float, float, float],
         ) -> Tuple[float, float, float, float]:
+            """Hamilton product of two (w, x, y, z) quaternions."""
             w1, x1, y1, z1 = lhs
             w2, x2, y2, z2 = rhs
             return (
@@ -560,6 +562,7 @@ class Renderer:
         def _quat_conjugate(
             q: Tuple[float, float, float, float],
         ) -> Tuple[float, float, float, float]:
+            """Return the conjugate (inverse rotation) of a unit quaternion."""
             w, x, y, z = q
             return (w, -x, -y, -z)
 
@@ -696,6 +699,7 @@ class Renderer:
         segments = 64
 
         def _make_ring(radius: float, name: str) -> Optional[NodePath]:
+            """Build a flat circular line ring of the given radius."""
             segs = LineSegs(name)
             segs.setThickness(FLOOR_SHADOW_THICKNESS)
             segs.setColor(*FLOOR_SHADOW_COLOR)
@@ -749,6 +753,7 @@ class Renderer:
         self._update_bg_scale()
 
     def _resolve_asset_path(self, gltf_path: str) -> Optional[Path]:
+        """Resolve a GLTF path, falling back to the bundled assets/ directory."""
         path = Path(gltf_path)
         if path.exists():
             return path
@@ -773,6 +778,7 @@ class Renderer:
             segment_risks.extend([0.0] * (seg_count - len(segment_risks)))
 
         def _risk_to_color(risk: float) -> Tuple[float, float, float, float]:
+            """Map a [0, 1] collision risk onto the green→yellow→red heatmap."""
             risk = max(0.0, min(1.0, float(risk)))
             red = (0.95, 0.22, 0.20, 1.0)
             yellow = (1.00, 0.78, 0.10, 1.0)
@@ -804,6 +810,7 @@ class Renderer:
             return
 
         def _pose_neg_z_axis(hpr: Tuple[float, float, float]) -> Vec3:
+            """Return the local -Z axis of a pose in world coordinates."""
             q = Quat()
             q.setHpr(Vec3(hpr[0], hpr[1], hpr[2]))
             axis = q.xform(Vec3(0.0, 0.0, -1.0))
@@ -1635,6 +1642,7 @@ class Renderer:
     def publish_hold_path(
         self, cmd_pub: Any, pose: PoseTuple, ros_pose_override: Optional[dict] = None
     ) -> None:
+        """Publish a single-pose path so the robot holds at `pose`."""
         ros_pose = ros_pose_override or panda_pose_to_ros(pose)
         if ros_pose is None:
             return

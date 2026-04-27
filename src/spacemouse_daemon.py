@@ -22,6 +22,13 @@ except Exception as exc:  # pragma: no cover - runtime guard
         "pyspacemouse library not available. Install with: uv add pyspacemouse"
     ) from exc
 
+try:
+    import usb.core as _usbcore
+    import usb.util as _usbutil
+    _PYUSB_AVAILABLE = True
+except ImportError:
+    _PYUSB_AVAILABLE = False
+
 from config import (
     SPACEMOUSE_AXIS_SCALE,
     SPACEMOUSE_CROSS_DRIFT_MAX,
@@ -63,10 +70,12 @@ BUTTON_INDEX = {
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp `value` to the closed interval [lo, hi]."""
     return max(lo, min(hi, value))
 
 
 def _safe_float(state: Any, name: str) -> float:
+    """Return `state.name` as a float, or 0.0 if missing or unconvertible."""
     try:
         return float(getattr(state, name, 0.0))
     except Exception:
@@ -74,6 +83,7 @@ def _safe_float(state: Any, name: str) -> float:
 
 
 def _axis_value(state: Any, names: Iterable[str]) -> float:
+    """Return the first non-zero attribute among `names` on `state`."""
     for name in names:
         value = _safe_float(state, name)
         if value != 0.0:
@@ -82,6 +92,7 @@ def _axis_value(state: Any, names: Iterable[str]) -> float:
 
 
 def _apply_deadzone(value: float, deadzone: float) -> float:
+    """Suppress small inputs and rescale the rest into [-1, 1]."""
     dz = max(0.0, min(0.95, float(deadzone)))
     av = abs(value)
     if av <= dz:
@@ -91,6 +102,7 @@ def _apply_deadzone(value: float, deadzone: float) -> float:
 
 
 def _apply_curve(value: float, curve: float) -> float:
+    """Apply a sign-preserving power-law response curve (>=1 sharpens centre)."""
     c = max(1.0, float(curve))
     return (abs(value) ** c) * (1.0 if value >= 0.0 else -1.0)
 
@@ -98,6 +110,7 @@ def _apply_curve(value: float, curve: float) -> float:
 def _clip_translation_axes(
     x: float, y: float, z: float, clip_min: float, clip_ratio: float
 ) -> tuple[float, float, float]:
+    """Zero out axes weaker than `clip_ratio` × the dominant axis once above `clip_min`."""
     values = [x, y, z]
     abs_values = [abs(v) for v in values]
     dominant = max(abs_values)
@@ -116,10 +129,12 @@ def _clip_translation_axes(
 def _clip_rotation_axes(
     roll: float, pitch: float, yaw: float, clip_min: float, clip_ratio: float
 ) -> tuple[float, float, float]:
+    """Same dominant-axis clip as translation, applied to rotation axes."""
     return _clip_translation_axes(roll, pitch, yaw, clip_min, clip_ratio)
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI / env overrides for the SpaceMouse daemon settings."""
     parser = argparse.ArgumentParser(description="Publish SpaceMouse state over ZMQ.")
     parser.add_argument(
         "--endpoint",
@@ -300,7 +315,102 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class _USBState:
+    """Minimal state object with the same attribute names pyspacemouse returns."""
+
+    __slots__ = ("x", "y", "z", "roll", "pitch", "yaw", "buttons")
+
+    def __init__(self) -> None:
+        """Reset all axes to 0 and buttons to an empty list."""
+        self.x = self.y = self.z = 0.0
+        self.roll = self.pitch = self.yaw = 0.0
+        self.buttons: list[bool] = []
+
+
+class _USBSpaceMouse:
+    """Direct USB reader for SpaceNavigator when hidraw is unavailable.
+
+    Uses pyusb to read raw HID interrupt reports and decode them using the
+    same axis/button mapping as pyspacemouse's devices.toml for SpaceNavigator.
+    """
+
+    _VID = 0x046D
+    _PID = 0xC626
+    _IFACE = 0
+    _ENDPOINT = 0x81
+    _SCALE = 350.0
+
+    def __init__(self, dev: Any, detached: bool) -> None:
+        """Wrap an open pyusb device handle and remember whether we detached the kernel driver."""
+        self._dev = dev
+        self._detached = detached
+        self._state = _USBState()
+
+    @classmethod
+    def open(cls) -> Optional["_USBSpaceMouse"]:
+        """Find and claim a SpaceNavigator over raw USB; return None if unavailable."""
+        if not _PYUSB_AVAILABLE:
+            return None
+        dev = _usbcore.find(idVendor=cls._VID, idProduct=cls._PID)
+        if dev is None:
+            return None
+        try:
+            detached = False
+            if dev.is_kernel_driver_active(cls._IFACE):
+                dev.detach_kernel_driver(cls._IFACE)
+                detached = True
+            dev.set_configuration()
+            _usbutil.claim_interface(dev, cls._IFACE)
+            return cls(dev, detached)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _s16(data: Any, offset: int) -> int:
+        """Decode a little-endian signed 16-bit integer from `data[offset:offset+2]`."""
+        raw = int(data[offset]) | (int(data[offset + 1]) << 8)
+        return raw - 65536 if raw >= 32768 else raw
+
+    def read(self) -> Optional[_USBState]:
+        """Read one HID report and update the cached state, or return None on timeout."""
+        try:
+            data = self._dev.read(self._ENDPOINT, 7, timeout=50)
+        except _usbcore.USBError as exc:
+            if getattr(exc, "errno", None) == 110:  # ETIMEDOUT
+                return None
+            raise
+        except Exception:
+            return None
+        if not data or len(data) < 2:
+            return None
+        rid = data[0]
+        s = self._s16
+        scale = self._SCALE
+        if rid == 1 and len(data) >= 7:
+            self._state.x = s(data, 1) / scale
+            self._state.y = -s(data, 3) / scale
+            self._state.z = -s(data, 5) / scale
+        elif rid == 2 and len(data) >= 7:
+            self._state.pitch = -s(data, 1) / scale
+            self._state.roll = -s(data, 3) / scale
+            self._state.yaw = s(data, 5) / scale
+        elif rid == 3 and len(data) >= 2:
+            bits = int(data[1])
+            self._state.buttons = [bool(bits & 1), bool(bits & 2)]
+        return self._state
+
+    def close(self) -> None:
+        """Release the USB interface and reattach the kernel driver if we detached it."""
+        try:
+            _usbutil.release_interface(self._dev, self._IFACE)
+            if self._detached:
+                self._dev.attach_kernel_driver(self._IFACE)
+        except Exception:
+            pass
+
+
 def _open_device_quiet() -> tuple[bool, Optional[str], Any]:
+    """Open the SpaceMouse via pyspacemouse, then pyusb fallback, suppressing log spam."""
     # pyspacemouse.open() prints discovery lines; capture them to avoid spam.
     buf_out = io.StringIO()
     buf_err = io.StringIO()
@@ -320,12 +430,19 @@ def _open_device_quiet() -> tuple[bool, Optional[str], Any]:
         msg = (
             buf_err.getvalue() or buf_out.getvalue()
         ).strip() or "open returned False"
+        usb_handle = _USBSpaceMouse.open()
+        if usb_handle is not None:
+            return True, None, usb_handle
         return False, msg, None
     except Exception as exc:
+        usb_handle = _USBSpaceMouse.open()
+        if usb_handle is not None:
+            return True, None, usb_handle
         return False, str(exc), None
 
 
 def _read_state(device_handle: Any) -> Any:
+    """Read one state sample, preferring an explicit handle over the module-level read."""
     if device_handle is not None and hasattr(device_handle, "read"):
         return device_handle.read()
     if callable(getattr(pyspacemouse, "read", None)):
@@ -336,6 +453,7 @@ def _read_state(device_handle: Any) -> Any:
 
 
 def main() -> int:
+    """Read the SpaceMouse and republish a gamepad-schema payload over ZMQ."""
     args = _parse_args()
     dump = os.getenv("SPACEMOUSE_DUMP") == "1"
 

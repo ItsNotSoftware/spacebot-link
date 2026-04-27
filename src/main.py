@@ -88,10 +88,13 @@ except Exception:
 
 
 class SpacebotLinkApp(ShowBase):
+    """Top-level Panda3D app: scene, input, navigation, ZMQ buses, subprocesses."""
+
     _STATUS_CACHE_PERIOD_S = 0.05
 
     @staticmethod
     def _select_remote_input_daemon() -> str:
+        """Resolve which input daemon(s) to autostart from env / config."""
         value = os.getenv("REMOTE_INPUT_DAEMON", REMOTE_INPUT_DAEMON)
         selected = str(value).strip().lower()
         if selected in {"gamepad", "spacemouse", "both", "none"}:
@@ -321,6 +324,7 @@ class SpacebotLinkApp(ShowBase):
         orig_publish = self.cmd_pub.publish
 
         def _tracked_publish(topic: str, data: Dict[str, Any]) -> None:
+            """Publish wrapper that records the send timestamp for latency tracking."""
             sent_s = time.monotonic()
             orig_publish(topic, data)
             self._record_cmd_sent(topic, sent_s)
@@ -336,6 +340,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_cmd_sent_s = float(sent_s)
 
     def _cmd_pending_key(self, topic: str) -> str:
+        """Map a publish topic to a stable bucket key for pending-command tracking."""
         if topic == TOPIC_CMD_VEL:
             return "cmd_vel"
         if topic == TOPIC_GOAL:
@@ -488,6 +493,7 @@ class SpacebotLinkApp(ShowBase):
         return Task.cont
 
     def _start_octomap_process(self) -> None:
+        """Spawn the C++ OctoMap raycast service as a child process."""
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         bin_path = os.path.abspath(os.path.join(root_dir, OCTOMAP_SERVER_BIN))
         map_path = os.path.abspath(os.path.join(root_dir, OCTOMAP_SERVER_MAP))
@@ -518,6 +524,7 @@ class SpacebotLinkApp(ShowBase):
             print(f"[octomap] Failed to start process: {ex}")
 
     def _start_gamepad_remote_process(self) -> None:
+        """Spawn the gamepad daemon as a child process publishing to ZMQ."""
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         script_path = os.path.abspath(
             os.path.join(root_dir, "src", "gamepad_daemon.py")
@@ -541,6 +548,7 @@ class SpacebotLinkApp(ShowBase):
             print(f"[gamepad] Failed to start remote process: {ex}")
 
     def _start_spacemouse_remote_process(self) -> None:
+        """Spawn the SpaceMouse daemon as a child process publishing to ZMQ."""
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         script_path = os.path.abspath(
             os.path.join(root_dir, "src", "spacemouse_daemon.py")
@@ -566,6 +574,7 @@ class SpacebotLinkApp(ShowBase):
             print(f"[spacemouse] Failed to start remote process: {ex}")
 
     def _init_octomap_socket(self) -> None:
+        """Create the REQ socket used to query the OctoMap raycast service."""
         sock = self._octomap_context.socket(zmq.REQ)
         sock.setsockopt(zmq.LINGER, 0)
         sock.setsockopt(zmq.RCVTIMEO, 60)
@@ -576,6 +585,7 @@ class SpacebotLinkApp(ShowBase):
         self._octomap_socket = sock
 
     def _octomap_task(self, task: PythonTask) -> int:
+        """Periodically query the raycast service for avatar feasibility/floor data."""
         if self._direct_mode:
             self.renderer.clear_floor_indicator()
             return Task.again
@@ -633,6 +643,7 @@ class SpacebotLinkApp(ShowBase):
         avatar_pose_ros: Dict[str, Dict[str, float]],
         robot_pose_panda: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
     ) -> None:
+        """Update floor projection and avatar colour from a raycast response."""
         axis_map = {
             "x": (1.0, 0.0, 0.0),
             "-x": (-1.0, 0.0, 0.0),
@@ -695,6 +706,7 @@ class SpacebotLinkApp(ShowBase):
         self._last_floor_height = ground_distance
 
         def _parse_bool(value: Any) -> Optional[bool]:
+            """Coerce JSON booleans/strings to Optional[bool]."""
             if isinstance(value, bool):
                 return value
             if isinstance(value, str):
@@ -825,6 +837,7 @@ class SpacebotLinkApp(ShowBase):
     def _normalize_vec3_tuple(
         vec: Tuple[float, float, float],
     ) -> Optional[Tuple[float, float, float]]:
+        """Return a unit-length copy of `vec`, or None if it's degenerate."""
         x, y, z = vec
         mag = (x * x + y * y + z * z) ** 0.5
         if not math.isfinite(mag) or mag <= 1e-6:
@@ -1222,32 +1235,39 @@ class SpacebotLinkApp(ShowBase):
 
     # ---- path viz setters ----
     def _set_path_mode(self, mode: str) -> None:
+        """Switch the path visualisation style and re-render."""
         self.renderer.set_path_mode(mode)
         self._rerender_path()
 
     def _set_marker_spacing(self, spacing_m: float) -> None:
+        """Update spacing between path markers and re-render."""
         self.renderer.set_marker_spacing(spacing_m)
         self._rerender_path()
 
     def _set_anim_speed(self, speed: float) -> None:
+        """Update animated-path ghost speed and re-render."""
         self.renderer.set_anim_speed(speed)
         self._rerender_path()
 
     def _set_anim_instances(self, count: int) -> None:
+        """Update animated-path ghost count and re-render."""
         self.renderer.set_anim_instances(count)
         self._rerender_path()
 
     def _set_anim_line_enabled(self, enabled: bool) -> None:
+        """Toggle the line overlay shown alongside animated path ghosts."""
         self.renderer.set_anim_line_enabled(enabled)
         self._rerender_path()
 
     # ---- cleanup ----
     def _cleanup(self) -> None:
+        """Tear down sockets, subprocesses, and renderer state on shutdown."""
         if self._cleaned_up:
             return
         self._cleaned_up = True
 
         def _stop_process(proc: Optional[subprocess.Popen], name: str) -> None:
+            """Terminate a child process politely, falling back to kill on timeout."""
             if proc is None or proc.poll() is not None:
                 return
             try:
@@ -1303,6 +1323,7 @@ class SpacebotLinkApp(ShowBase):
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Entry point: construct the app, run the Panda3D loop, and clean up."""
     app = SpacebotLinkApp()
     try:
         app.run()

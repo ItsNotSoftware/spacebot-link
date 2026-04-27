@@ -1,3 +1,9 @@
+/*
+ * OctoMap raycast service: ZMQ REP server that answers avatar feasibility and
+ * floor-distance queries from the SpaceBotLink interface. Loads a .bt OcTree
+ * once at startup and replies synchronously to JSON requests.
+ */
+
 #include <octomap/AbstractOcTree.h>
 #include <octomap/OcTree.h>
 #include <zmq.h>
@@ -35,17 +41,21 @@ struct Options {
     double max_range = 50.0;
 };
 
+// 3D cross product.
 static Vec3 cross(const Vec3 &a, const Vec3 &b) {
     return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
             a.x * b.y - a.y * b.x};
 }
 
+// 3D dot product.
 static double dot(const Vec3 &a, const Vec3 &b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+// Euclidean length of a vector.
 static double norm(const Vec3 &v) { return std::sqrt(dot(v, v)); }
 
+// Normalize `v`; return `fallback` when it's too small to safely normalize.
 static Vec3 normalize_or_default(const Vec3 &v, const Vec3 &fallback) {
     double n = norm(v);
     if (n < 1e-9) {
@@ -54,8 +64,8 @@ static Vec3 normalize_or_default(const Vec3 &v, const Vec3 &fallback) {
     return {v.x / n, v.y / n, v.z / n};
 }
 
+// Rotate `v` by quaternion `q` without building a rotation matrix.
 static Vec3 rotate_vector_by_quat(const Vec3 &v, const Quat &q) {
-    // Rotate a vector by a quaternion without building a matrix.
     Vec3 q_vec{q.x, q.y, q.z};
     Vec3 t = cross(q_vec, v);
     t.x *= 2.0;
@@ -69,6 +79,7 @@ static Vec3 rotate_vector_by_quat(const Vec3 &v, const Quat &q) {
             v.z + q_w_t.z + cross_qvec_t.z};
 }
 
+// Look up a required child object by `key`; report the missing field via `err`.
 static bool get_child_required(const boost::property_tree::ptree &pt,
                                const std::string &key,
                                const boost::property_tree::ptree *&out,
@@ -84,6 +95,7 @@ static bool get_child_required(const boost::property_tree::ptree &pt,
     return true;
 }
 
+// Read a required numeric field by `key`; report the missing/invalid name via `err`.
 static bool get_double_required(const boost::property_tree::ptree &pt,
                                 const std::string &key, double *out,
                                 std::string *err) {
@@ -98,6 +110,7 @@ static bool get_double_required(const boost::property_tree::ptree &pt,
     return true;
 }
 
+// Parse a {"x":..,"y":..,"z":..} child node into `out`.
 static bool parse_vec3(const boost::property_tree::ptree &pt,
                        const std::string &key, Vec3 *out, std::string *err) {
     const boost::property_tree::ptree *node = nullptr;
@@ -116,6 +129,7 @@ static bool parse_vec3(const boost::property_tree::ptree &pt,
     return true;
 }
 
+// Parse a {"x":..,"y":..,"z":..,"w":..} child node into `out`.
 static bool parse_quat(const boost::property_tree::ptree &pt,
                        const std::string &key, Quat *out, std::string *err) {
     const boost::property_tree::ptree *node = nullptr;
@@ -137,6 +151,7 @@ static bool parse_quat(const boost::property_tree::ptree &pt,
     return true;
 }
 
+// Parse a pose object with required `position` and `orientation` children.
 static bool parse_pose(const boost::property_tree::ptree &root,
                        const std::string &key, Pose *out, std::string *err) {
     const boost::property_tree::ptree *pose = nullptr;
@@ -152,6 +167,7 @@ static bool parse_pose(const boost::property_tree::ptree &root,
     return true;
 }
 
+// Build a JSON error reply of the form {"error": "<message>"}.
 static std::string make_error_response(const std::string &message) {
     boost::property_tree::ptree response;
     response.put("error", message);
@@ -160,6 +176,13 @@ static std::string make_error_response(const std::string &message) {
     return out.str();
 }
 
+/*
+ * Answer one avatar_query: cast a ray from the avatar along its local -Z to
+ * find the nearest "ground" voxel, ray-test from the robot toward the avatar
+ * for occlusion, and check whether the avatar position lies inside an
+ * occupied voxel. Returns a JSON string with ground_distance, ground_axis,
+ * avatar_occluded, and avatar_in_obstacle (or an "error" field on bad input).
+ */
 static std::string handle_request(const std::string &request_json,
                                   octomap::OcTree &tree, double max_range) {
     boost::property_tree::ptree root;
@@ -273,10 +296,12 @@ static std::string handle_request(const std::string &request_json,
     return out.str();
 }
 
+// Print CLI usage to stderr.
 static void print_usage(const char *program) {
     std::cerr << "Usage: " << program << " <map.bt> [endpoint] [max_range]\n";
 }
 
+// Parse positional CLI args into `options`; returns false on missing/invalid input.
 static bool parse_options(int argc, char **argv, Options *options) {
     if (argc < 2) {
         return false;
@@ -295,6 +320,7 @@ static bool parse_options(int argc, char **argv, Options *options) {
     return true;
 }
 
+// Entry point: load the map, bind a ZMQ REP socket, and serve queries forever.
 int main(int argc, char **argv) {
     Options options;
     if (!parse_options(argc, argv, &options)) {

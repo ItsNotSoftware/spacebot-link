@@ -251,6 +251,7 @@ class UI:
         _draw_attitude_preview_frame()
 
         def _quality_badge(value):
+            """Map a [0, 1] path-goodness score to (label, colour) for the badge."""
             try:
                 q = max(0.0, min(1.0, float(value)))
             except Exception:
@@ -506,6 +507,7 @@ class UI:
         imgui.begin("Debug")
 
         def _parse_bool_flag(value):
+            """Coerce JSON booleans/strings to Optional[bool]."""
             if isinstance(value, bool):
                 return value
             if isinstance(value, str):
@@ -515,6 +517,7 @@ class UI:
             return None
 
         def _format_hhmmss(seconds: Any) -> str:
+            """Format a duration in seconds as HH:MM:SS."""
             try:
                 total = max(0, int(float(seconds)))
             except Exception:

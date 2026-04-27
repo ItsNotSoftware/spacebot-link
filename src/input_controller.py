@@ -9,6 +9,7 @@ from typing import Any, Optional
 from panda3d.core import ClockObject, Vec3
 
 from config import (
+    ABORT_BUTTON,
     BACKWARD_BUTTON,
     DOWN_BUTTON,
     DOWN_BUTTON_ALT,
@@ -70,6 +71,7 @@ from config import (
     GAMEPAD_TRIGGER_SMOOTHING,
     GAMEPAD_VERTICAL_SCALE,
     LEFT_BUTTON,
+    MODE_TOGGLE_BUTTON,
     MOVE_SPEED,
     PITCH_DOWN_BUTTON,
     PITCH_UP_BUTTON,
@@ -89,7 +91,10 @@ from teleop_bus import TeleopBusSub
 
 
 class _RemoteGamepad:
+    """Cached gamepad/SpaceMouse state received from a daemon over ZMQ."""
+
     def __init__(self) -> None:
+        """Initialize empty axis/button caches."""
         self.name = "remote"
         self.axes: dict[str, float] = {}
         self.buttons: dict[str, bool] = {}
@@ -99,6 +104,7 @@ class _RemoteGamepad:
         self.last_payload_ts: float = 0.0
 
     def update(self, payload: dict[str, Any], now: float) -> None:
+        """Replace cached state from a fresh daemon payload."""
         self.name = str(payload.get("name") or "remote")
         axes = payload.get("axes")
         buttons = payload.get("buttons")
@@ -118,6 +124,7 @@ class _RemoteGamepad:
     def axis_value(
         self, axis_names: tuple[str, ...], axis_index: Optional[int]
     ) -> float:
+        """Return axis value by name, falling back to positional index."""
         for name in axis_names:
             if name in self.axes:
                 return float(self.axes[name])
@@ -128,6 +135,7 @@ class _RemoteGamepad:
     def button_value(
         self, button_names: tuple[str, ...], button_index: Optional[int]
     ) -> bool:
+        """Return button state by name, falling back to positional index."""
         for name in button_names:
             if name in self.buttons:
                 return bool(self.buttons[name])
@@ -137,6 +145,8 @@ class _RemoteGamepad:
 
 
 class _AxisFilter:
+    """Per-axis pipeline: deadzone → autoscale → response curve → smoothing."""
+
     def __init__(
         self,
         deadzone: float,
@@ -146,6 +156,7 @@ class _AxisFilter:
         autoscale_max_gain: float,
         autoscale_decay: float,
     ) -> None:
+        """Capture filter parameters and reset internal state."""
         self.deadzone = float(deadzone)
         self.curve = float(curve)
         self.smoothing = float(smoothing)
@@ -156,6 +167,7 @@ class _AxisFilter:
         self._peak: float = 0.0
 
     def apply(self, raw: float) -> float:
+        """Run the full filter pipeline on a raw axis sample."""
         # Apply deadzone before autoscale so small stick drift is never amplified.
         value = self._apply_deadzone(raw)
         value = self._autoscale(value)
@@ -169,6 +181,7 @@ class _AxisFilter:
         return value
 
     def _apply_deadzone(self, value: float) -> float:
+        """Suppress small inputs and rescale the rest into [-1, 1]."""
         deadzone = max(0.0, min(0.999, self.deadzone))
         if abs(value) <= deadzone:
             return 0.0
@@ -176,6 +189,7 @@ class _AxisFilter:
         return scaled * (1.0 if value >= 0.0 else -1.0)
 
     def _autoscale(self, value: float) -> float:
+        """Boost low-amplitude inputs based on a decaying recent peak."""
         if self.autoscale_max_gain <= 1.0 or self.autoscale_min <= 0.0:
             return value
         peak = max(self._peak * self.autoscale_decay, abs(value))
@@ -187,12 +201,16 @@ class _AxisFilter:
 
 
 class _TriggerFilter:
+    """Unipolar trigger filter with deadzone and low-pass smoothing."""
+
     def __init__(self, deadzone: float, smoothing: float) -> None:
+        """Capture filter parameters and reset state."""
         self.deadzone = float(deadzone)
         self.smoothing = float(smoothing)
         self.value: float = 0.0
 
     def apply(self, raw: float) -> float:
+        """Clamp, deadzone, and smooth a [0, 1] trigger sample."""
         value = max(0.0, min(1.0, raw))
         if value < self.deadzone:
             value = 0.0
@@ -205,6 +223,8 @@ class _TriggerFilter:
 
 
 class InputController:
+    """Polls keyboard/gamepad/SpaceMouse and drives avatar or cmd_vel teleop."""
+
     def __init__(
         self,
         base: Any,
@@ -351,9 +371,11 @@ class InputController:
         mw = self.base.mouseWatcherNode
 
         def _mw_down(btn: Any) -> bool:
+            """Return True while `btn` is currently held."""
             return bool(mw) and mw.is_button_down(btn)
 
         def _mw_pressed(btn: Any) -> bool:
+            """Edge-trigger: True only on the frame `btn` transitions to down."""
             pressed = bool(mw) and mw.is_button_down(btn)
             key = f"key:{btn}"
             prev = self._button_prev.get(key, False)
@@ -361,6 +383,14 @@ class InputController:
             return pressed and not prev
 
         gp = self._get_gamepad()
+
+        if _mw_pressed(ABORT_BUTTON):
+            if callable(self._on_abort):
+                self._on_abort()
+
+        if _mw_pressed(MODE_TOGGLE_BUTTON):
+            if callable(self._on_toggle_mode):
+                self._on_toggle_mode()
 
         if not self._move_robot:
             move = Vec3(0, 0, 0)
@@ -542,6 +572,7 @@ class InputController:
             pass
 
     def _get_gamepad(self) -> Any:
+        """Return current remote gamepad state, or None if no daemon is feeding us."""
         if not GAMEPAD_ENABLED or not self._remote_enabled:
             return None
         now = ClockObject.getGlobalClock().getFrameTime()
@@ -559,6 +590,7 @@ class InputController:
         return None
 
     def _move_stick(self, gp: _RemoteGamepad) -> tuple[float, float]:
+        """Return filtered translation stick values in [-1, 1]."""
         lx = self._axis_value(gp, GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_INDEX_LEFT_X)
         ly = self._axis_value(gp, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_AXIS_INDEX_LEFT_Y)
         lx = self._move_filter_x.apply(lx) * GAMEPAD_MOVE_SCALE
@@ -568,6 +600,7 @@ class InputController:
         return lx, ly
 
     def _look_stick(self, gp: _RemoteGamepad) -> tuple[float, float]:
+        """Return filtered rotation stick values in [-1, 1] with invert applied."""
         rx = self._axis_value(gp, GAMEPAD_AXIS_RIGHT_X, GAMEPAD_AXIS_INDEX_RIGHT_X)
         ry = self._axis_value(gp, GAMEPAD_AXIS_RIGHT_Y, GAMEPAD_AXIS_INDEX_RIGHT_Y)
         rx = self._look_filter_x.apply(rx) * GAMEPAD_LOOK_SCALE
@@ -581,6 +614,7 @@ class InputController:
         return rx, ry
 
     def _triggers(self, gp: _RemoteGamepad) -> tuple[float, float]:
+        """Return filtered L2/R2 trigger values in [0, 1]."""
         lt = self._trigger_value(gp, GAMEPAD_AXIS_L2, GAMEPAD_AXIS_INDEX_L2)
         rt = self._trigger_value(gp, GAMEPAD_AXIS_R2, GAMEPAD_AXIS_INDEX_R2)
         return self._trigger_filter_l.apply(lt), self._trigger_filter_r.apply(rt)
@@ -591,6 +625,7 @@ class InputController:
         axis_names: tuple[str, ...],
         axis_index: Optional[int],
     ) -> float:
+        """Read a raw axis from the device by name with index fallback."""
         return device.axis_value(axis_names, axis_index)
 
     def _trigger_value(
@@ -599,6 +634,7 @@ class InputController:
         axis_names: tuple[str, ...],
         axis_index: Optional[int],
     ) -> float:
+        """Read a trigger axis clamped to [0, 1]."""
         value = device.axis_value(axis_names, axis_index)
         value = max(0.0, min(1.0, value))
         return value
@@ -609,6 +645,7 @@ class InputController:
         button_names: tuple[str, ...],
         button_index: Optional[int],
     ) -> bool:
+        """Return True while the named button is held."""
         pressed = device.button_value(button_names, button_index)
         if pressed:
             self._log_button_press(device)
@@ -620,6 +657,7 @@ class InputController:
         button_names: tuple[str, ...],
         button_index: Optional[int],
     ) -> bool:
+        """Edge-trigger: True only on the frame the named button goes down."""
         key = f"edge:{button_index}:{button_names}"
         pressed = device.button_value(button_names, button_index)
         prev = self._button_prev.get(key, False)
@@ -629,6 +667,7 @@ class InputController:
         return pressed and not prev
 
     def _axis_lock(self, x: float, y: float, ratio: float) -> tuple[float, float]:
+        """Zero the weaker axis when the stronger axis dominates by `ratio`."""
         ratio = float(ratio)
         ax = abs(x)
         ay = abs(y)
@@ -641,12 +680,14 @@ class InputController:
         return x, y
 
     def _normalize_pair(self, x: float, y: float) -> tuple[float, float]:
+        """Clamp magnitude of a 2D vector to 1 while preserving direction."""
         mag = math.hypot(x, y)
         if mag > 1.0 and mag > 0.0:
             return x / mag, y / mag
         return x, y
 
     def _log_gamepad(self, device: _RemoteGamepad) -> None:
+        """Dump the device's known axis/button names (debug helper)."""
         print(f"[gamepad] device: {device.name}")
         if device.axes:
             print("[gamepad] axes:")
@@ -658,11 +699,13 @@ class InputController:
                 print(f"  - {name}")
 
     def _log_button_press(self, device: _RemoteGamepad) -> None:
+        """Print a debug line on each button press when GAMEPAD_DEBUG=2."""
         if os.getenv("GAMEPAD_DEBUG") != "2":
             return
         print("[gamepad] button pressed")
 
     def _handle_dpad_rotation(self, gp: _RemoteGamepad) -> None:
+        """Snap-rotate the avatar by 90° on D-pad edge transitions."""
         x = self._axis_value(gp, GAMEPAD_AXIS_DPAD_X, GAMEPAD_AXIS_INDEX_DPAD_X)
         y = self._axis_value(gp, GAMEPAD_AXIS_DPAD_Y, GAMEPAD_AXIS_INDEX_DPAD_Y)
         thr = float(GAMEPAD_DPAD_THRESHOLD)
@@ -682,6 +725,7 @@ class InputController:
         self._dpad_prev["y"] = y
 
     def _is_gamepad_active(self) -> bool:
+        """Return True when any gamepad axis or button is currently engaged."""
         gp = self._get_gamepad()
         if gp is None:
             return False

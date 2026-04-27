@@ -22,6 +22,8 @@ PoseTuple = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
 @dataclass
 class NavState:
+    """Mutable navigation state shared between the UI, input, and nav layer."""
+
     mode: str = "Goal Mode"
     nav_publishing_enabled: bool = True
     move_target: str = "Avatar"
@@ -48,6 +50,7 @@ class Navigation:
 
     @property
     def follow_sample_period(self) -> float:
+        """Period (s) at which Follow Mode samples the avatar pose."""
         return self._follow_sample_period
 
     # ---- mode management ----

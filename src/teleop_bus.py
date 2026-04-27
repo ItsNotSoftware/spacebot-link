@@ -26,6 +26,7 @@ class TeleopBusSub:
         rcv_hwm: int = 200,
         conflate: bool = False,
     ) -> None:
+        """Open a SUB socket against `endpoint` with the given filter and queue settings."""
         self._ctx = zmq.Context.instance()
         self._sock = self._ctx.socket(zmq.SUB)
         self._sock.connect(endpoint)
@@ -136,6 +137,7 @@ class TeleopBusPub:
         endpoint: str = "tcp://localhost:5557",
         snd_hwm: int = 1000,
     ) -> None:
+        """Open a PUB socket against `endpoint` with the given send queue size."""
         self._ctx = zmq.Context.instance()
         self._sock = self._ctx.socket(zmq.PUB)
         self._sock.setsockopt(zmq.SNDHWM, snd_hwm)

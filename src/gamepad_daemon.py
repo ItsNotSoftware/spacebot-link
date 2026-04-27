@@ -82,10 +82,12 @@ _axis_cal: Dict[str, tuple[float, float]] = {}
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp `value` to the closed interval [lo, hi]."""
     return max(lo, min(hi, value))
 
 
 def _norm_stick(value: int) -> float:
+    """Map a raw stick reading to [-1, 1] using the device's apparent range."""
     if -32768 <= value <= 32767:
         return _clamp(value / 32767.0, -1.0, 1.0)
     if 0 <= value <= 255:
@@ -98,6 +100,7 @@ def _norm_stick(value: int) -> float:
 
 
 def _norm_stick_calibrated(code: str, value: int) -> float:
+    """Self-calibrating stick normalisation that tracks centre and peak per axis."""
     if not (0 <= value <= 255):
         return _norm_stick(value)
     center, peak = _axis_cal.get(code, (float(value), 0.0))
@@ -112,6 +115,7 @@ def _norm_stick_calibrated(code: str, value: int) -> float:
 
 
 def _norm_trigger(value: int) -> float:
+    """Map a raw trigger reading to [0, 1] using the device's apparent range."""
     if 0 <= value <= 255:
         return _clamp(value / 255.0, 0.0, 1.0)
     if 0 <= value <= 1023:
@@ -124,6 +128,7 @@ def _norm_trigger(value: int) -> float:
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parse CLI / env overrides for the daemon's publish settings."""
     parser = argparse.ArgumentParser(description="Publish gamepad state over ZMQ.")
     parser.add_argument(
         "--endpoint",
@@ -145,6 +150,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Read gamepad events and republish normalised state on a ZMQ PUB socket."""
     args = _parse_args()
     dump_events = os.getenv("GAMEPAD_DUMP") == "1"
     ctx = zmq.Context.instance()
